@@ -40,7 +40,7 @@ const chatModelMenu = document.getElementById('chat-model-menu');
 const content = document.querySelector('.content');
 
 const SETTINGS_TAB = { type: 'settings', name: 'Settings' };
-const CHAT_TAB = { type: 'chat', name: 'Talk to your doc' };
+const CHAT_TAB = { type: 'chat', name: 'Talk to your docs' };
 
 let chatMessagesData = [];
 let chatSessions = [];
@@ -540,7 +540,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Talk to your doc
+// Talk to your docs
 function getEnabledProviders() {
   return aiProviders.filter((p) => p.enabled !== false);
 }
@@ -1203,6 +1203,15 @@ window.mdviewer?.onChatStreamDone?.(result => {
 });
 
 let streamFlushRAF = null;
+
+function closeOpenCodeFences(md) {
+  const matches = md.match(/^(`{3,})/gm);
+  if (matches && matches.length % 2 !== 0) {
+    return md + '\n' + matches[matches.length - 1];
+  }
+  return md;
+}
+
 function scheduleStreamFlush() {
   if (streamFlushRAF) return;
   streamFlushRAF = requestAnimationFrame(() => {
@@ -1212,28 +1221,32 @@ function scheduleStreamFlush() {
     const lastBubble = inner?.querySelector('.chat-bubble:last-child');
     if (!lastBubble) return;
     const lastMsg = chatMessagesData[chatMessagesData.length - 1];
-    if (!lastMsg || lastMsg.loading) return;
-    if (lastMsg.role !== 'assistant' || lastMsg.error) return;
+    if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.error) return;
     const text = lastMsg.content || '';
     if (lastBubble.classList.contains('loading')) {
       lastBubble.classList.remove('loading');
       lastBubble.classList.add('assistant');
     }
-    const existing = lastBubble.querySelector('.chat-streaming-plain');
-    if (existing) {
-      existing.textContent = text;
-    } else {
+    let mdWrap = lastBubble.querySelector('.markdown-body');
+    if (!mdWrap) {
       lastBubble.innerHTML = '';
-      const pre = document.createElement('div');
-      pre.className = 'markdown-body chat-streaming-plain';
-      pre.style.whiteSpace = 'pre-wrap';
-      pre.style.wordBreak = 'break-word';
-      pre.textContent = text;
-      lastBubble.appendChild(pre);
-      const cursor = document.createElement('span');
+      mdWrap = document.createElement('div');
+      mdWrap.className = 'markdown-body';
+      lastBubble.appendChild(mdWrap);
+    }
+    const safeMd = closeOpenCodeFences(text);
+    mdWrap.innerHTML = markedLib.parse(safeMd);
+    let cursor = lastBubble.querySelector('.chat-stream-cursor');
+    if (!cursor) {
+      cursor = document.createElement('span');
       cursor.className = 'chat-stream-cursor';
       cursor.setAttribute('aria-hidden', 'true');
-      lastBubble.appendChild(cursor);
+    }
+    lastBubble.appendChild(cursor);
+    const cm = chatMessages;
+    if (cm) {
+      const atBottom = cm.scrollHeight - cm.scrollTop - cm.clientHeight < 80;
+      if (atBottom) cm.scrollTop = cm.scrollHeight;
     }
   });
 }
@@ -1287,19 +1300,28 @@ async function sendChatMessage() {
   let streamHandled = false;
   streamChunkHandler = (chunk) => {
     accumulated += chunk;
-    const idx = chatMessagesData.findIndex((m) => m.loading);
-    if (idx >= 0) {
-      chatMessagesData[idx] = { role: 'assistant', content: accumulated, loading: false };
+    const lastMsg = chatMessagesData[chatMessagesData.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.content = accumulated;
+      lastMsg.loading = false;
       scheduleStreamFlush();
     }
   };
   streamDoneHandler = async (result) => {
     streamHandled = true;
-    chatMessagesData.pop();
+    const lastMsg = chatMessagesData[chatMessagesData.length - 1];
     if (result?.error) {
-      chatMessagesData.push({ role: 'assistant', content: '', error: result.error });
-    } else {
-      chatMessagesData.push({ role: 'assistant', content: accumulated || '' });
+      if (lastMsg && lastMsg.role === 'assistant') {
+        lastMsg.content = '';
+        lastMsg.error = result.error;
+        lastMsg.loading = false;
+      } else {
+        chatMessagesData.push({ role: 'assistant', content: '', error: result.error });
+      }
+    } else if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.content = accumulated || '';
+      lastMsg.loading = false;
+      delete lastMsg.error;
     }
     await saveChatMessages();
     chatSending = false;

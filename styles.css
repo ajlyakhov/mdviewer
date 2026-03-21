@@ -405,7 +405,7 @@ html.theme-dark .back-btn:hover {
   background: var(--accent-hover);
 }
 
-/* Talk to your doc button */
+/* Talk to your docs button */
 .talk-to-doc-btn {
   -webkit-app-region: no-drag;
   flex-shrink: 0;
@@ -713,6 +713,18 @@ html.theme-dark .back-btn:hover {
   max-width: 640px;
   margin: 0 auto;
   width: 100%;
+}
+.chat-title {
+  display: none;
+  font-weight: 700;
+  font-size: 36px;
+  color: var(--text);
+  margin: 0;
+  width: 100%;
+  text-align: center;
+}
+.chat-messages:empty ~ .chat-input-area .chat-title {
+  display: block;
 }
 .chat-control-bar {
   width: 100%;

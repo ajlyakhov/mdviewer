@@ -320,9 +320,6 @@ ipcMain.handle('chat-completion-stream', async (event, { providerId, messages, c
   const keyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
   if (provider.type === 'lmstudio') merged.baseUrl = provider.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
   else merged.apiKey = provider.apiKey || apiKeys[keyMap[provider.type]]?.apiKey || '';
-  if (!['lmstudio', 'openai'].includes(provider.type)) {
-    return { error: 'Streaming not supported for this provider' };
-  }
   const request = buildStreamRequest(merged, messages, contextDocuments || []);
   if (!request) return { error: 'Failed to build stream request' };
   try {

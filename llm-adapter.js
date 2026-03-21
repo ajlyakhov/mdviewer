@@ -332,6 +332,52 @@ function buildStreamRequest(provider, messages, contextDocuments) {
       body,
     };
   }
+  if (provider.type === 'claude') {
+    const claudeMessages = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
+    const body = JSON.stringify({
+      model: provider.modelId || 'claude-3-5-sonnet-20241022',
+      max_tokens: 4096,
+      system: docPrompt,
+      messages: claudeMessages,
+      stream: true,
+    });
+    return {
+      url: 'https://api.anthropic.com/v1/messages',
+      options: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': provider.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+      },
+      body,
+    };
+  }
+  if (provider.type === 'google') {
+    const contents = [];
+    for (const m of messages) {
+      if (m.role === 'user' || m.role === 'assistant') {
+        const role = m.role === 'user' ? 'user' : 'model';
+        contents.push({ role, parts: [{ text: m.content }] });
+      }
+    }
+    const modelId = provider.modelId || 'gemini-1.5-flash';
+    const body = JSON.stringify({
+      contents,
+      systemInstruction: { parts: [{ text: docPrompt }] },
+    });
+    return {
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(provider.apiKey)}`,
+      options: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      },
+      body,
+    };
+  }
   return null;
 }
 
