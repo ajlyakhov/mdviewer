@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-21
+
+### Added
+
+- Recency-first chat request shaping to prioritize the latest user question over stale thread context.
+- Dynamic output token budgeting that scales by effective model context and current prompt size.
+- Structured conversation memory (facts, decisions, open threads) to summarize older turns while keeping recent turns verbatim.
+- Context-window aware budgeting using model metadata from LM Studio (`loaded context` -> `max context` fallback).
+- Debug telemetry for prompt budgeting (`[llm-adapter] prompt-budget`) and stop diagnostics.
+
+### Changed
+
+- Project positioning shifted to AI-first markdown workflow (local docs + context-aware chat) rather than viewer-first.
+- Context assembly is now token-budget based instead of count-based message slicing.
+- Open document context is now capped and truncated deterministically with `... [truncated]` markers.
+- System instruction now explicitly prioritizes answering the latest user message first.
+- Output caps are explicitly set per provider (LM Studio/OpenAI/Claude/Google) instead of relying on provider defaults.
+
+### Breaking
+
+- Chat prompt construction behavior changed significantly; long-running conversations now favor recency and compressed memory over full-history inclusion.
+
 ## [1.2.0] - 2026-03-21
 
 ### Added

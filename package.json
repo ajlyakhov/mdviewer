@@ -1,7 +1,7 @@
 {
   "name": "mdviewer",
-  "version": "1.2.0",
-  "description": "Markdown viewer with Mermaid support",
+  "version": "2.0.0",
+  "description": "AI-first Markdown workspace with local-document chat, recency-first context control, and Mermaid support",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
