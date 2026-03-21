@@ -1,10 +1,11 @@
 const hljsLib = window.hljs;
 const { Marked } = window.marked;
 const { markedHighlight } = window.markedHighlight;
+const markedKatexExt = window.markedKatex;
 
 const markedLib = {
-  parse: (md) =>
-    new Marked(
+  parse: (md) => {
+    const parser = new Marked(
       markedHighlight({
         langPrefix: 'hljs language-',
         emptyLangClass: 'hljs',
@@ -15,9 +16,15 @@ const markedLib = {
           return hljsLib.highlightAuto(code).value;
         },
       })
-    ).parse(md),
+    );
+    if (typeof markedKatexExt === 'function') {
+      parser.use(markedKatexExt({ throwOnError: false, strict: 'ignore', nonStandard: true }));
+    }
+    return parser.parse(md);
+  },
 };
 const mermaidLib = window.mermaid;
+const katexRenderMath = window.renderMathInElement;
 
 const dropzone = document.getElementById('dropzone');
 const viewer = document.getElementById('viewer');
@@ -38,6 +45,11 @@ const chatModelSelect = document.getElementById('chat-model-select');
 const chatModelTrigger = document.getElementById('chat-model-trigger');
 const chatModelMenu = document.getElementById('chat-model-menu');
 const content = document.querySelector('.content');
+const importProgressModal = document.getElementById('import-progress-modal');
+const importProgressTitle = document.getElementById('import-progress-title');
+const importProgressSubtitle = document.getElementById('import-progress-subtitle');
+const importProgressBar = document.getElementById('import-progress-bar');
+const importProgressMeta = document.getElementById('import-progress-meta');
 
 const SETTINGS_TAB = { type: 'settings', name: 'Settings' };
 const CHAT_TAB = { type: 'chat', name: 'Talk to your docs' };
@@ -60,6 +72,8 @@ let activeIndex = 0;
 let searchCurrentIndex = 0;
 let restoreDone = false;
 let pendingOpenPaths = [];
+let activePdfImportPath = '';
+const DEBUG_LLM_RAW_MARKDOWN = true;
 
 // Theme
 function getSystemTheme() {
@@ -188,6 +202,92 @@ function resolveRelativePath(basePath, relativePath) {
 
 let currentFilePath = null;
 
+function normalizeMathMarkdown(md) {
+  let out = String(md || '');
+  const looksLikeMath = (s) =>
+    /\\[a-zA-Z]+|_[{(]|\^[{(]|\\frac|\\text|\\times|\\approx|\\mathbf|\\Bigl|\\Bigr/.test(String(s || ''));
+
+  // Preserve LaTeX delimiters through marked by converting \( \) and \[ \] into $ and $$.
+  out = out.replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_, expr) => `$$\n${String(expr || '').trim()}\n$$`);
+  out = out.replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, (_, expr) => `$${String(expr || '').trim()}$`);
+
+  // Common OCR/LLM artifact: ;\cmd; -> \cmd
+  out = out.replace(/;\s*\\([a-zA-Z]+)\s*;/g, '\\$1');
+  // Common OCR/LLM artifact around operators: ;=; ;+; ;-; ;\times;
+  out = out.replace(/[;；]\s*([=+\-*/])\s*[;；]/g, ' $1 ');
+  out = out.replace(/[;；]\s*\\times\s*[;；]/g, ' \\times ');
+  // Common OCR artifact in currency values inside formulas: €,12.00 -> €12.00
+  out = out.replace(/€,(\d)/g, '€$1');
+
+  // Robust conversion for raw [ ... ] math blocks (single-line and multi-line).
+  // IMPORTANT: do NOT touch escaped LaTeX blocks \[ ... \] (already valid).
+  const convertBracketMathBlocks = (input) => {
+    let result = '';
+    let i = 0;
+    while (i < input.length) {
+      const ch = input[i];
+      if (ch !== '[') {
+        result += ch;
+        i += 1;
+        continue;
+      }
+      if (i > 0 && input[i - 1] === '\\') {
+        result += ch;
+        i += 1;
+        continue;
+      }
+      let depth = 1;
+      let j = i + 1;
+      while (j < input.length && depth > 0) {
+        if (input[j] === '[' && input[j - 1] !== '\\') depth += 1;
+        else if (input[j] === ']' && input[j - 1] !== '\\') depth -= 1;
+        j += 1;
+      }
+      if (depth !== 0) {
+        result += ch;
+        i += 1;
+        continue;
+      }
+      const inner = input.slice(i + 1, j - 1);
+      if (!looksLikeMath(inner)) {
+        result += `[${inner}]`;
+        i = j;
+        continue;
+      }
+      const compact = inner
+        .split('\n')
+        .map((line) => line.trim())
+        .join(' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      const display = /[\n\r]/.test(inner) || compact.length > 80;
+      result += display ? `$$\n${compact}\n$$` : `$${compact}$`;
+      i = j;
+    }
+    return result;
+  };
+
+  out = convertBracketMathBlocks(out);
+  return out;
+}
+
+function renderMathInContainer(container) {
+  if (!container || typeof katexRenderMath !== 'function') return;
+  try {
+    katexRenderMath(container, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$', right: '$', display: false },
+        { left: '\\(', right: '\\)', display: false },
+        { left: '\\[', right: '\\]', display: true },
+      ],
+      throwOnError: false,
+      strict: 'ignore',
+      ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+    });
+  } catch (_) {}
+}
+
 function setupLinkHandler() {
   viewer.addEventListener('click', (e) => {
     const a = e.target.closest('a[href]');
@@ -237,7 +337,8 @@ function resolveLocalImages(filePath) {
 async function parseAndRender(md, filePath) {
   const mermaidBlocks = [];
   const placeholder = '___MERMAID_PLACEHOLDER_';
-  let processed = md.replace(/```mermaid\n([\s\S]*?)```/g, (_, code) => {
+  const mathNormalized = normalizeMathMarkdown(md);
+  let processed = mathNormalized.replace(/```mermaid\n([\s\S]*?)```/g, (_, code) => {
     const idx = mermaidBlocks.length;
     mermaidBlocks.push(code.trim());
     return `<div class="mermaid" data-mermaid-id="${idx}">${placeholder}</div>`;
@@ -260,6 +361,7 @@ async function parseAndRender(md, filePath) {
       el.innerHTML = `<pre class="mermaid-error">${err.message}</pre>`;
     }
   }
+  renderMathInContainer(markdownEl);
 }
 
 function renderActive() {
@@ -465,6 +567,24 @@ async function collectMdPaths(paths) {
   return [...new Set(result)];
 }
 
+function collectPdfPaths(paths) {
+  const result = [];
+  for (const p of paths || []) {
+    if (/\.pdf$/i.test(String(p || '').trim())) result.push(p);
+  }
+  return [...new Set(result)];
+}
+
+async function importDroppedPdfs(paths) {
+  for (const pdfPath of paths || []) {
+    try {
+      await window.mdviewer?.importPdf?.(pdfPath);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+}
+
 function setupDragDrop(el) {
   el.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -483,9 +603,52 @@ function setupDragDrop(el) {
     e.stopPropagation();
     content.classList.remove('drag-over');
     const raw = getPathsFromDrop(e);
-    const paths = await collectMdPaths(raw);
-    if (paths.length) await openFiles(paths);
+    const mdPaths = await collectMdPaths(raw);
+    const pdfPaths = collectPdfPaths(raw);
+    if (mdPaths.length) await openFiles(mdPaths);
+    if (pdfPaths.length) await importDroppedPdfs(pdfPaths);
   });
+}
+
+function getFileNameFromPath(filePath) {
+  const safe = String(filePath || '').trim();
+  if (!safe) return 'PDF';
+  const parts = safe.split(/[/\\]/);
+  return parts[parts.length - 1] || 'PDF';
+}
+
+function showImportProgress(payload = {}) {
+  if (!importProgressModal || !importProgressBar) return;
+  const sourceFilePath = payload.filePath || activePdfImportPath || '';
+  if (sourceFilePath) activePdfImportPath = sourceFilePath;
+  const sourceName = getFileNameFromPath(sourceFilePath);
+  const current = Number(payload.current);
+  const total = Number(payload.total);
+  const hasDeterminate = Number.isFinite(total) && total > 0 && Number.isFinite(current) && current >= 0;
+  const percent = hasDeterminate ? Math.max(0, Math.min(100, Math.round((current / total) * 100))) : 0;
+
+  importProgressModal.classList.remove('hidden');
+  if (importProgressTitle) importProgressTitle.textContent = 'Importing PDF...';
+  if (importProgressSubtitle) importProgressSubtitle.textContent = sourceName;
+  if (importProgressMeta) {
+    if (hasDeterminate) importProgressMeta.textContent = `Processing page ${Math.min(total, Math.max(0, current))} of ${total}`;
+    else importProgressMeta.textContent = 'Analyzing pages...';
+  }
+  if (hasDeterminate) {
+    importProgressBar.classList.remove('indeterminate');
+    importProgressBar.style.width = `${percent}%`;
+  } else {
+    importProgressBar.style.width = '35%';
+    importProgressBar.classList.add('indeterminate');
+  }
+}
+
+function hideImportProgress() {
+  if (!importProgressModal || !importProgressBar) return;
+  importProgressModal.classList.add('hidden');
+  importProgressBar.classList.add('indeterminate');
+  importProgressBar.style.width = '35%';
+  if (importProgressMeta) importProgressMeta.textContent = '';
 }
 
 // Dropzone icon click - open folder dialog
@@ -510,6 +673,12 @@ function handleOpenPaths(paths) {
 window.mdviewer?.onOpenFile?.((path) => handleOpenPaths([path]));
 window.mdviewer?.onOpenFiles?.((paths) => handleOpenPaths(paths));
 window.mdviewer?.onOpenFolder?.(openFolder);
+window.mdviewer?.onPdfImportProgress?.((payload) => {
+  showImportProgress(payload);
+});
+window.mdviewer?.onPdfImportDone?.(() => {
+  hideImportProgress();
+});
 
 function showExternalUrl(url) {
   viewerMarkdown?.classList.add('hidden');
@@ -1178,6 +1347,7 @@ async function renderMarkdownWithMermaid(html, container) {
     }
     block.closest('pre')?.replaceWith(wrapper);
   }
+  renderMathInContainer(container);
 }
 
 function scrollChatToShowPromptAtTop() {
@@ -1217,10 +1387,16 @@ async function renderChatMessages() {
     } else {
       const mdWrap = document.createElement('div');
       mdWrap.className = 'markdown-body';
-      const html = markedLib.parse(msg.content || '');
+      const normalizedMd = normalizeMathMarkdown(msg.content || '');
+      if (DEBUG_LLM_RAW_MARKDOWN) {
+        console.info('[LLM RAW MD]', msg.content || '');
+        console.info('[LLM NORMALIZED MD]', normalizedMd);
+      }
+      const html = markedLib.parse(normalizedMd);
       mdWrap.innerHTML = html;
       bubble.appendChild(mdWrap);
-      await renderMarkdownWithMermaid(mdWrap.innerHTML, mdWrap);
+      await renderMarkdownWithMermaid(html, mdWrap);
+      renderMathInContainer(mdWrap);
     }
     inner.appendChild(bubble);
   }
@@ -1459,8 +1635,10 @@ function flushStreamToDOM() {
     mdWrap.className = 'markdown-body';
     lastBubble.appendChild(mdWrap);
   }
-  const safeMd = closeOpenCodeFences(text);
-  mdWrap.innerHTML = markedLib.parse(safeMd);
+  const safeMd = normalizeMathMarkdown(closeOpenCodeFences(text));
+  const html = markedLib.parse(safeMd);
+  mdWrap.innerHTML = html;
+  renderMathInContainer(mdWrap);
   let indicator = lastBubble.querySelector('.chat-generating');
   if (!indicator) {
     indicator = document.createElement('span');

@@ -1,6 +1,6 @@
 {
   "name": "mdviewer",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "AI-first, local-first Markdown copilot with context-aware chat and Mermaid support",
   "main": "main.js",
   "scripts": {
@@ -20,9 +20,12 @@
   "dependencies": {
     "electron-store": "^10.0.0",
     "highlight.js": "^11.9.0",
+    "katex": "^0.16.40",
     "marked": "^11.0.0",
     "marked-highlight": "^2.2.3",
-    "mermaid": "^10.6.1"
+    "marked-katex-extension": "^5.1.7",
+    "mermaid": "^10.6.1",
+    "pdf-parse": "^1.1.1"
   },
   "build": {
     "appId": "com.mdviewer.app",

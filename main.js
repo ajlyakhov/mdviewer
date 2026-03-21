@@ -8,6 +8,7 @@ const { Worker } = require('worker_threads');
 let store;
 let mainWindow;
 let pendingOpenFile = null;
+let pdfParseLoader = null;
 
 function getWindow() {
   return BrowserWindow.getFocusedWindow() || mainWindow;
@@ -61,6 +62,19 @@ function setupMenu() {
                 if (!result.canceled && result.filePaths?.length && mainWindow) {
                   mainWindow.webContents.send('open-folder', result.filePaths[0]);
                 }
+              }
+            );
+          },
+        },
+        {
+          label: 'Import PDF...',
+          click: () => {
+            showOpenDialog(
+              { properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] },
+              async (result) => {
+                if (result.canceled || !result.filePaths?.length || !mainWindow) return;
+                const sourcePdfPath = result.filePaths[0];
+                await importPdfAndOpen(sourcePdfPath, getWindow() || mainWindow);
               }
             );
           },
@@ -237,6 +251,218 @@ async function collectMdFiles(dirPath) {
   return out;
 }
 
+async function loadPdfParse() {
+  if (!pdfParseLoader) {
+    // pdf-parse@1.x uses a Node-oriented PDF.js bundle and avoids DOMMatrix warnings in Electron main.
+    pdfParseLoader = require('pdf-parse');
+  }
+  return pdfParseLoader;
+}
+
+function buildImportedMdPath(pdfPath) {
+  const dir = path.dirname(pdfPath);
+  const baseName = path.basename(pdfPath, path.extname(pdfPath));
+  const candidates = [
+    path.join(dir, `${baseName}.md`),
+    path.join(dir, `${baseName}.imported.md`),
+  ];
+  for (let i = 2; i <= 999; i++) {
+    candidates.push(path.join(dir, `${baseName}.imported-${i}.md`));
+  }
+  const available = candidates.find((candidate) => !fs.existsSync(candidate));
+  return available || path.join(dir, `${baseName}.imported-${Date.now()}.md`);
+}
+
+function sanitizePdfImportErrorMessage(err) {
+  const raw = String(err?.message || err || '').trim();
+  if (!raw) return 'Unknown PDF import error';
+  if (raw.includes('Likely scanned/image-only PDF')) {
+    return raw;
+  }
+  if (raw.includes('PasswordException')) {
+    return 'This PDF is encrypted/password-protected and cannot be imported.';
+  }
+  if (/InvalidPDFException|FormatError/i.test(raw)) {
+    return 'The selected file is not a valid PDF or is corrupted.';
+  }
+  return raw;
+}
+
+function median(values) {
+  if (!values.length) return 12;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function normalizeLineText(s) {
+  return String(s || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .trim();
+}
+
+function itemFontSize(item) {
+  const h = Number(item?.height);
+  if (Number.isFinite(h) && h > 0) return h;
+  const t = item?.transform || [];
+  const fallback = Math.sqrt((Number(t[2]) || 0) ** 2 + (Number(t[3]) || 0) ** 2);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : 12;
+}
+
+function pageTextToMarkdown(items) {
+  const prepared = (items || [])
+    .map((item) => {
+      const text = normalizeLineText(item?.str || '');
+      if (!text) return null;
+      const t = item?.transform || [];
+      return {
+        text,
+        x: Number(t[4]) || 0,
+        y: Number(t[5]) || 0,
+        size: itemFontSize(item),
+        fontName: String(item?.fontName || ''),
+      };
+    })
+    .filter(Boolean);
+
+  if (!prepared.length) return { markdown: '', charCount: 0 };
+  const yTolerance = 2.2;
+  const lines = [];
+  for (const seg of prepared.sort((a, b) => b.y - a.y || a.x - b.x)) {
+    const last = lines[lines.length - 1];
+    if (!last || Math.abs(last.y - seg.y) > yTolerance) {
+      lines.push({ y: seg.y, segments: [seg] });
+    } else {
+      last.segments.push(seg);
+    }
+  }
+
+  const lineData = lines
+    .map((line) => {
+      const segments = line.segments.sort((a, b) => a.x - b.x);
+      const joined = normalizeLineText(segments.map((s) => s.text).join(' '));
+      if (!joined) return null;
+      return {
+        text: joined,
+        maxSize: Math.max(...segments.map((s) => s.size)),
+        avgSize: segments.reduce((acc, s) => acc + s.size, 0) / segments.length,
+        boldHint: segments.some((s) => /bold|black|demi/i.test(s.fontName)),
+      };
+    })
+    .filter(Boolean);
+
+  if (!lineData.length) return { markdown: '', charCount: 0 };
+  const baseSize = median(lineData.map((l) => l.avgSize));
+  const mdLines = [];
+  let chars = 0;
+
+  for (const line of lineData) {
+    const text = line.text;
+    chars += text.length;
+    const headingLike = (line.maxSize >= baseSize * 1.38 || (line.boldHint && line.maxSize >= baseSize * 1.22)) && text.length <= 120;
+    if (headingLike) {
+      mdLines.push(`## ${text}`);
+      mdLines.push('');
+      continue;
+    }
+    if (/^([•◦▪●\-*]|(\d+[\.\)]))\s+/.test(text)) {
+      mdLines.push(text.replace(/^([•◦▪●])/u, '-'));
+      continue;
+    }
+    mdLines.push(text);
+  }
+  return { markdown: mdLines.join('\n').replace(/\n{3,}/g, '\n\n').trim(), charCount: chars };
+}
+
+async function importPdfToMarkdown(pdfPath, onProgress) {
+  const pdfParse = await loadPdfParse();
+  const targetPath = buildImportedMdPath(pdfPath);
+  const bytes = await fs.promises.readFile(pdfPath);
+  const pages = [];
+  let totalChars = 0;
+  let processedPages = 0;
+  const parsed = await pdfParse(bytes, {
+    pagerender: async (pageData) => {
+      const content = await pageData.getTextContent({
+        normalizeWhitespace: true,
+        disableCombineTextItems: false,
+      });
+      processedPages += 1;
+      const pageCount = Number(pageData?._pdfInfo?.numPages) || null;
+      const { markdown, charCount } = pageTextToMarkdown(content?.items || []);
+      totalChars += charCount;
+      pages.push(`<!-- Page ${processedPages} -->\n\n${markdown}`);
+      if (typeof onProgress === 'function') {
+        onProgress({
+          current: processedPages,
+          total: pageCount,
+          taskStatus: pageCount && processedPages >= pageCount ? 'finished' : 'processing',
+        });
+      }
+      return markdown;
+    },
+  });
+
+  const pageCount = Number(parsed?.numpages) || processedPages;
+  const markdown = pages.join('\n\n---\n\n').trim();
+  if (pageCount === 0) {
+    throw new Error('PDF has no pages.');
+  }
+  if (!markdown) {
+    throw new Error('No extractable text found in PDF.');
+  }
+  if (totalChars < Math.max(40, pageCount * 16)) {
+    throw new Error(
+      'Likely scanned/image-only PDF: extracted text is too small for reliable markdown conversion. OCR fallback is required.'
+    );
+  }
+  await fs.promises.writeFile(targetPath, markdown, 'utf-8');
+  return targetPath;
+}
+
+async function importPdfAndOpen(sourcePdfPath, win) {
+  const targetWindow = win || getWindow() || mainWindow;
+  const sender = targetWindow?.webContents;
+  sender?.send('pdf-import-progress', {
+    taskStatus: 'started',
+    current: 0,
+    total: null,
+    filePath: sourcePdfPath,
+  });
+  try {
+    const mdPath = await importPdfToMarkdown(sourcePdfPath, (progress) => {
+      sender?.send('pdf-import-progress', {
+        taskStatus: progress.taskStatus || 'processing',
+        current: Number(progress.current) || 0,
+        total: Number(progress.total) || null,
+        filePath: sourcePdfPath,
+      });
+    });
+    sender?.send('pdf-import-done', {
+      ok: true,
+      filePath: sourcePdfPath,
+      outputPath: mdPath,
+    });
+    mainWindow?.webContents?.send('open-files', [mdPath]);
+    return { ok: true, outputPath: mdPath };
+  } catch (err) {
+    const detail = sanitizePdfImportErrorMessage(err);
+    sender?.send('pdf-import-done', {
+      ok: false,
+      filePath: sourcePdfPath,
+      error: detail,
+    });
+    dialog.showMessageBox(targetWindow || mainWindow, {
+      type: 'error',
+      title: 'Import PDF failed',
+      message: 'Could not import PDF',
+      detail,
+    });
+    return { ok: false, error: detail };
+  }
+}
+
 function findDuti() {
   const candidates = ['/opt/homebrew/bin/duti', '/usr/local/bin/duti'];
   for (const p of candidates) {
@@ -278,6 +504,14 @@ ipcMain.handle('read-dir', async (_, targetPath) => {
     return /\.(md|markdown)$/i.test(targetPath) ? [targetPath] : [];
   }
   return collectMdFiles(targetPath);
+});
+
+ipcMain.handle('import-pdf', async (event, sourcePdfPath) => {
+  if (!sourcePdfPath || !/\.pdf$/i.test(sourcePdfPath)) {
+    return { ok: false, error: 'Please provide a valid PDF file path.' };
+  }
+  const win = BrowserWindow.fromWebContents(event.sender) || getWindow() || mainWindow;
+  return importPdfAndOpen(sourcePdfPath, win);
 });
 
 // AI / Chat

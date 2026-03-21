@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-03-21
+
+### Added
+
+- PDF import from menu and drag-and-drop with conversion to Markdown output files beside the source PDF.
+- Import progress UI with page-level progress events and completion notifications.
+- KaTeX-based math rendering for markdown and chat responses, including support for inline and display formulas.
+- Bracket/delimiter normalization for OCR/LLM math artifacts before markdown rendering.
+
+### Changed
+
+- Dropzone copy now explicitly advertises PDF import behavior.
+- PDF parsing now surfaces user-friendly errors for encrypted/corrupt/image-only files.
+- Build now includes `pdf-parse`, `katex`, and `marked-katex-extension` dependencies for import/render pipelines.
+
 ## [2.0.0] - 2026-03-21
 
 ### Added

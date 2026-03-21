@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="node_modules/highlight.js/styles/github.min.css" id="hljs-light">
   <link rel="stylesheet" href="node_modules/highlight.js/styles/github-dark.min.css" id="hljs-dark">
+  <link rel="stylesheet" href="node_modules/katex/dist/katex.min.css">
 </head>
 <body>
   <div class="app">
@@ -35,8 +36,8 @@
               <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
             </svg>
           </button>
-          <p>Drag & drop Markdown files or folders</p>
-          <p class="dropzone-hint">or click to open a folder</p>
+          <p>Drag & drop Markdown files, PDF files, or folders</p>
+          <p class="dropzone-hint">or click to open a folder (PDF files are imported to Markdown)</p>
         </div>
       </div>
       <div class="viewer-container" id="viewer" style="display:none">
@@ -172,10 +173,24 @@
     </main>
   </div>
 
+  <div class="import-progress-modal hidden" id="import-progress-modal" role="dialog" aria-modal="true" aria-labelledby="import-progress-title">
+    <div class="import-progress-card">
+      <h3 class="import-progress-title" id="import-progress-title">Importing PDF...</h3>
+      <p class="import-progress-subtitle" id="import-progress-subtitle">Preparing import...</p>
+      <div class="import-progress-track">
+        <div class="import-progress-bar indeterminate" id="import-progress-bar"></div>
+      </div>
+      <p class="import-progress-meta" id="import-progress-meta"></p>
+    </div>
+  </div>
+
   <script src="node_modules/marked/marked.min.js"></script>
   <script src="node_modules/marked-highlight/lib/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="node_modules/mermaid/dist/mermaid.min.js"></script>
+  <script src="node_modules/katex/dist/katex.min.js"></script>
+  <script src="node_modules/marked-katex-extension/lib/index.umd.js"></script>
+  <script src="node_modules/katex/dist/contrib/auto-render.min.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

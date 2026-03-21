@@ -19,7 +19,10 @@ MD Viewer is no longer just a markdown renderer. The core goal is reliable AI-as
 - Adaptive output token budgeting per request
 - Prompt-budget debug telemetry for troubleshooting
 - Drag & drop files or folders (recursive)
+- Drag & drop PDF files for automatic PDF -> Markdown import
 - Open files via menu (File → Open File / Open Folder)
+- Import PDF via menu (File -> Import PDF...)
+- Math rendering via KaTeX in documents and AI chat
 - Set as default app for `.md` files (Settings)
 - Tabbed interface (closeable tabs)
 - Search within active tab (case-insensitive, highlights matches)
