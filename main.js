@@ -294,7 +294,7 @@ ipcMain.handle('save-ai-config', (_, { aiProviders, aiApiKeys }) => {
   return { ok: true };
 });
 
-ipcMain.handle('chat-completion', async (_, { providerId, messages, contextDocuments }) => {
+ipcMain.handle('chat-completion', async (_, { providerId, messages, contextDocuments, contextWindow }) => {
   const providers = store.get('aiProviders', []);
   const apiKeys = store.get('aiApiKeys', {});
   const provider = providers.find((p) => p.id === providerId);
@@ -303,6 +303,12 @@ ipcMain.handle('chat-completion', async (_, { providerId, messages, contextDocum
   const keyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
   if (provider.type === 'lmstudio') merged.baseUrl = provider.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
   else merged.apiKey = provider.apiKey || apiKeys[keyMap[provider.type]]?.apiKey || '';
+  if (contextWindow) {
+    merged.maxContextLength = contextWindow.maxContextLength ?? merged.maxContextLength;
+    merged.loadedContextLength = contextWindow.loadedContextLength ?? merged.loadedContextLength;
+    merged.effectiveContextLength = contextWindow.effectiveContextLength ?? merged.effectiveContextLength;
+    merged.maxOutputTokens = contextWindow.maxOutputTokens ?? merged.maxOutputTokens;
+  }
   try {
     const content = await llmChatCompletion(merged, messages, contextDocuments || []);
     return { content };
@@ -311,7 +317,7 @@ ipcMain.handle('chat-completion', async (_, { providerId, messages, contextDocum
   }
 });
 
-ipcMain.handle('chat-completion-stream', async (event, { providerId, messages, contextDocuments }) => {
+ipcMain.handle('chat-completion-stream', async (event, { providerId, messages, contextDocuments, contextWindow }) => {
   const providers = store.get('aiProviders', []);
   const apiKeys = store.get('aiApiKeys', {});
   const provider = providers.find((p) => p.id === providerId);
@@ -320,6 +326,12 @@ ipcMain.handle('chat-completion-stream', async (event, { providerId, messages, c
   const keyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
   if (provider.type === 'lmstudio') merged.baseUrl = provider.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
   else merged.apiKey = provider.apiKey || apiKeys[keyMap[provider.type]]?.apiKey || '';
+  if (contextWindow) {
+    merged.maxContextLength = contextWindow.maxContextLength ?? merged.maxContextLength;
+    merged.loadedContextLength = contextWindow.loadedContextLength ?? merged.loadedContextLength;
+    merged.effectiveContextLength = contextWindow.effectiveContextLength ?? merged.effectiveContextLength;
+    merged.maxOutputTokens = contextWindow.maxOutputTokens ?? merged.maxOutputTokens;
+  }
   const request = buildStreamRequest(merged, messages, contextDocuments || []);
   if (!request) return { error: 'Failed to build stream request' };
   try {
@@ -417,7 +429,18 @@ ipcMain.handle('fetch-lmstudio-models', async (_, baseUrl) => {
       .map((m) => ({
         id: m.key ?? m.id ?? m.name ?? m.model,
         name: m.display_name ?? m.key ?? m.id ?? m.name ?? m.model,
-        maxContextLength: m.max_context_length ?? m.context_length ?? m.maxContextLength,
+        maxContextLength: m.max_context_length ?? m.context_length ?? m.maxContextLength ?? null,
+        loadedContextLength:
+          m.loaded_instances?.[0]?.config?.context_length ??
+          m.loadedInstances?.[0]?.config?.contextLength ??
+          null,
+        effectiveContextLength:
+          m.loaded_instances?.[0]?.config?.context_length ??
+          m.loadedInstances?.[0]?.config?.contextLength ??
+          m.max_context_length ??
+          m.context_length ??
+          m.maxContextLength ??
+          null,
       }))
       .filter((m) => m.id && !seen.has(m.id) && seen.add(m.id));
     return { models };

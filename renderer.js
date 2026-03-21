@@ -47,6 +47,14 @@ let chatSessions = [];
 let activeSessionId = null;
 let aiProviders = [];
 
+const DEFAULT_MAX_CONTEXT_TOKENS = 8192;
+const DEFAULT_RESERVED_OUTPUT_TOKENS = 700;
+const INPUT_SAFETY_MARGIN_TOKENS = 200;
+const APPROX_CHARS_PER_TOKEN = 4;
+const MAX_DOCS_FOR_CONTEXT = 5;
+const MAX_DOC_CHARS = 4000;
+const MAX_RECENT_MESSAGES = 24;
+
 let tabs = [];
 let activeIndex = 0;
 let searchCurrentIndex = 0;
@@ -280,9 +288,16 @@ function renderActive() {
   viewerMarkdown?.scrollTo?.(0, 0);
 }
 
+function getSearchContainer() {
+  const tab = tabs[activeIndex];
+  if (tab?.type === 'chat') return chatMessages;
+  return markdownEl;
+}
+
 function applySearchHighlights(term) {
+  const container = getSearchContainer();
   searchCurrentIndex = 0;
-  markdownEl.querySelectorAll('.search-highlight').forEach((el) => {
+  container.querySelectorAll('.search-highlight').forEach((el) => {
     const parent = el.parentNode;
     parent.replaceChild(document.createTextNode(el.textContent), el);
     parent.normalize();
@@ -291,7 +306,7 @@ function applySearchHighlights(term) {
 
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(escapeRe(term), 'gi');
-  const walker = document.createTreeWalker(markdownEl, NodeFilter.SHOW_TEXT, null, false);
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
   const textNodes = [];
   let n;
   while ((n = walker.nextNode())) textNodes.push(n);
@@ -317,7 +332,8 @@ function applySearchHighlights(term) {
 }
 
 function scrollToSearchMatch(direction) {
-  const highlights = markdownEl.querySelectorAll('.search-highlight');
+  const container = getSearchContainer();
+  const highlights = container.querySelectorAll('.search-highlight');
   if (!highlights.length) return;
   const len = highlights.length;
   searchCurrentIndex = (searchCurrentIndex + direction + len) % len;
@@ -620,9 +636,42 @@ const aiAddModelId = document.getElementById('ai-add-model-id');
 const aiAddSave = document.getElementById('ai-add-save');
 const aiAddCancel = document.getElementById('ai-add-cancel');
 const typeLabels = { lmstudio: 'LM Studio', openai: 'OpenAI', claude: 'Claude', google: 'Google AI' };
+let lmStudioModelMetaById = {};
+let cloudModelMetaById = {};
 
 function getModelSearch() {
   return (aiModelSearch?.value || '').trim().toLowerCase();
+}
+
+function estimateTokens(text) {
+  return Math.max(1, Math.ceil(String(text || '').length / APPROX_CHARS_PER_TOKEN));
+}
+
+function toInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+function getProviderEffectiveContextLength(provider) {
+  return (
+    toInt(provider?.effectiveContextLength) ||
+    toInt(provider?.loadedContextLength) ||
+    toInt(provider?.maxContextLength) ||
+    DEFAULT_MAX_CONTEXT_TOKENS
+  );
+}
+
+function getProviderReservedOutputTokens(provider) {
+  const configured =
+    provider?.maxOutputTokensUserSet
+      ? toInt(provider?.maxOutputTokens)
+      : toInt(provider?.reservedOutputTokens);
+  if (configured) return configured;
+  const effective = getProviderEffectiveContextLength(provider);
+  if (effective <= 2300) return 700;
+  if (effective <= 5000) return 1200;
+  if (effective <= 12000) return 1600;
+  return 2000;
 }
 
 function renderAiModelsList() {
@@ -737,23 +786,40 @@ function initAiSettings() {
     if (lmstudioSelect) {
       lmstudioSelect.disabled = false;
       if (error) {
+        lmStudioModelMetaById = {};
         lmstudioSelect.innerHTML = '<option value="">Failed to load – enter manually below</option>';
         if (lmstudioHint) lmstudioHint.textContent = error;
         manualWrap?.classList.remove('hidden');
         return;
       }
       if (!models?.length) {
+        lmStudioModelMetaById = {};
         lmstudioSelect.innerHTML = '<option value="">No models found – check LM Studio server</option>';
         if (lmstudioHint) lmstudioHint.textContent = 'Ensure LM Studio server is running and a model is loaded.';
         return;
       }
+      lmStudioModelMetaById = Object.fromEntries(
+        models.map((m) => [m.id, m])
+      );
       lmstudioSelect.innerHTML = models
         .map((m) => {
-          const ctx = m.maxContextLength ? ` (${(m.maxContextLength / 1024).toFixed(0)}k ctx)` : '';
-          return `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}${escapeHtml(ctx)}</option>`;
+          const effective = toInt(m.effectiveContextLength) || toInt(m.maxContextLength);
+          const loaded = toInt(m.loadedContextLength);
+          const ctx = effective ? ` (${(effective / 1024).toFixed(0)}k ctx)` : '';
+          const runtime = loaded && effective && loaded < effective ? ' [loaded lower]' : '';
+          return `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}${escapeHtml(ctx)}${escapeHtml(runtime)}</option>`;
         })
         .join('');
-      if (lmstudioHint) lmstudioHint.textContent = `${models.length} model(s) from LM Studio`;
+      if (lmstudioHint) {
+        const downgraded = models.filter((m) => {
+          const loaded = toInt(m.loadedContextLength);
+          const max = toInt(m.maxContextLength);
+          return loaded && max && loaded < max;
+        }).length;
+        lmstudioHint.textContent = downgraded
+          ? `${models.length} model(s) from LM Studio. ${downgraded} loaded with smaller runtime context.`
+          : `${models.length} model(s) from LM Studio`;
+      }
     }
   }
 
@@ -775,21 +841,25 @@ function initAiSettings() {
     if (cloudSelect) {
       cloudSelect.disabled = false;
       if (!apiKey) {
+        cloudModelMetaById = {};
         cloudSelect.innerHTML = '<option value="">Enter API key in API Keys section first</option>';
         if (cloudHint) cloudHint.textContent = 'Expand API Keys and add your key.';
         return;
       }
       if (error) {
+        cloudModelMetaById = {};
         cloudSelect.innerHTML = '<option value="">Failed to load – enter manually below</option>';
         if (cloudHint) cloudHint.textContent = error;
         manualWrap?.classList.remove('hidden');
         return;
       }
       if (!models?.length) {
+        cloudModelMetaById = {};
         cloudSelect.innerHTML = '<option value="">No models found</option>';
         if (cloudHint) cloudHint.textContent = error || 'Check your API key.';
         return;
       }
+      cloudModelMetaById = Object.fromEntries(models.map((m) => [m.id, m]));
       cloudSelect.innerHTML = models
         .map((m) => {
           const ctx = m.maxContextLength ? ` (${(m.maxContextLength / 1024).toFixed(0)}k ctx)` : '';
@@ -832,11 +902,29 @@ function initAiSettings() {
     if (!modelId) modelId = aiAddModelId?.value?.trim() || '';
     if (!modelId) return;
     const keys = aiApiKeys;
+    const selectedMeta =
+      type === 'lmstudio'
+        ? lmStudioModelMetaById[modelId]
+        : ['openai', 'claude', 'google'].includes(type)
+          ? cloudModelMetaById[modelId]
+          : null;
+    const maxContextLength = toInt(selectedMeta?.maxContextLength);
+    const loadedContextLength = toInt(selectedMeta?.loadedContextLength);
+    const effectiveContextLength =
+      toInt(selectedMeta?.effectiveContextLength) ||
+      loadedContextLength ||
+      maxContextLength ||
+      null;
     const provider = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2),
       type,
       modelId,
       enabled: true,
+      maxContextLength,
+      loadedContextLength,
+      effectiveContextLength,
+      maxOutputTokens: null,
+      maxOutputTokensUserSet: false,
       baseUrl: type === 'lmstudio' ? (keys.lmstudio?.baseUrl || aiProviders.find((p) => p.type === 'lmstudio')?.baseUrl || 'http://127.0.0.1:1234') : undefined,
       apiKey: type === 'openai' ? (keys.openai?.apiKey || '') : type === 'claude' ? (keys.anthropic?.apiKey || '') : type === 'google' ? (keys.google?.apiKey || '') : '',
     };
@@ -887,7 +975,11 @@ async function saveChatMessages() {
   if (activeSessionId) {
     const idx = chatSessions.findIndex((s) => s.id === activeSessionId);
     if (idx >= 0) {
-      chatSessions[idx] = { ...chatSessions[idx], messages: [...chatMessagesData] };
+      chatSessions[idx] = {
+        ...chatSessions[idx],
+        messages: [...chatMessagesData],
+        memory: computeCurrentSessionMemory(),
+      };
       await window.mdviewer?.saveChatSessions?.({ sessions: chatSessions });
     }
   } else {
@@ -900,6 +992,14 @@ function sessionSummary(messages) {
   if (!first?.content) return 'New chat';
   const s = String(first.content).trim();
   return s.length > 50 ? s.slice(0, 47) + '...' : s;
+}
+
+function computeCurrentSessionMemory() {
+  const source = sanitizeMessagesForApi(chatMessagesData);
+  if (source.length <= 8) return buildStructuredSessionMemory(source);
+  const older = source.slice(0, -8);
+  const recent = source.slice(-8);
+  return mergeSessionMemory(buildStructuredSessionMemory(older), buildStructuredSessionMemory(recent));
 }
 
 function formatSessionTime(ts) {
@@ -930,6 +1030,7 @@ async function saveCurrentAsSession() {
         summary: sessionSummary(chatMessagesData),
         openFiles,
         messages: [...chatMessagesData],
+        memory: computeCurrentSessionMemory(),
       };
     }
   } else {
@@ -938,6 +1039,7 @@ async function saveCurrentAsSession() {
       summary: sessionSummary(chatMessagesData),
       openFiles,
       messages: [...chatMessagesData],
+      memory: computeCurrentSessionMemory(),
       createdAt: Date.now(),
     };
     chatSessions.push(session);
@@ -1109,7 +1211,7 @@ async function renderChatMessages() {
     if (msg.role === 'user') {
       bubble.textContent = msg.content;
     } else if (msg.loading) {
-      bubble.textContent = 'Thinking...';
+      bubble.innerHTML = `<span class="chat-generating"><svg class="chat-generating-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a7 7 0 0 1 7 7c0 2.5-1.5 4.5-3 5.5V16a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-1.5C6.5 13.5 5 11.5 5 9a7 7 0 0 1 7-7z"/><path d="M9 21h6"/><path d="M10 17v1a2 2 0 1 0 4 0v-1"/><path d="M12 6v2"/><path d="M9.5 7.5L10.5 9"/><path d="M14.5 7.5L13.5 9"/></svg><span class="chat-generating-text">Thinking</span></span>`;
     } else if (msg.error) {
       bubble.textContent = msg.error;
     } else {
@@ -1173,8 +1275,13 @@ async function renderChatTab() {
 }
 
 const ERROR_LIKE_CONTENT = /^(fetch failed|request failed|unknown error|network error|connection refused|econnrefused)$/i;
-function buildMessagesForApi() {
-  let out = chatMessagesData
+function getSelectedProvider() {
+  const providerId = chatModelSelect?.value;
+  return aiProviders.find((p) => p.id === providerId) || null;
+}
+
+function sanitizeMessagesForApi(messages) {
+  let out = (messages || [])
     .filter((m) => !m.loading && !m.error)
     .map((m) => ({ role: m.role, content: (m.content || '').trim() }))
     .filter((m) => m.content && !ERROR_LIKE_CONTENT.test(m.content));
@@ -1183,8 +1290,127 @@ function buildMessagesForApi() {
     const next = out[i + 1];
     return !next || next.role !== 'user' || next.content !== m.content;
   });
-  if (out.length > 20) out = out.slice(-20);
   return out;
+}
+
+function buildStructuredSessionMemory(messages) {
+  const source = sanitizeMessagesForApi(messages);
+  if (!source.length) return null;
+  const users = source.filter((m) => m.role === 'user').map((m) => m.content);
+  const assistants = source.filter((m) => m.role === 'assistant').map((m) => m.content);
+  const pick = (arr, max = 3) => arr.filter(Boolean).slice(-max).map((s) => (s.length > 180 ? `${s.slice(0, 177)}...` : s));
+  const facts = pick(users, 2);
+  const openThreads = pick(users.slice(-5), 3);
+  const decisions = pick(assistants, 2);
+  if (!facts.length && !openThreads.length && !decisions.length) return null;
+  return { facts, decisions, openThreads };
+}
+
+function mergeSessionMemory(a, b) {
+  const merge = (x, y) => [...new Set([...(x || []), ...(y || [])])].slice(-6);
+  if (!a && !b) return null;
+  return {
+    facts: merge(a?.facts, b?.facts),
+    decisions: merge(a?.decisions, b?.decisions),
+    openThreads: merge(a?.openThreads, b?.openThreads),
+  };
+}
+
+function formatSessionMemory(memory) {
+  if (!memory) return '';
+  const lines = ['Conversation memory:'];
+  if (memory.facts?.length) lines.push(`Facts: ${memory.facts.join(' | ')}`);
+  if (memory.decisions?.length) lines.push(`Decisions: ${memory.decisions.join(' | ')}`);
+  if (memory.openThreads?.length) lines.push(`Open threads: ${memory.openThreads.join(' | ')}`);
+  return lines.join('\n');
+}
+
+function buildMessagesForApi(provider) {
+  const source = sanitizeMessagesForApi(chatMessagesData);
+  if (!source.length) return source;
+
+  const effectiveContext = getProviderEffectiveContextLength(provider);
+  const reservedOutput = getProviderReservedOutputTokens(provider);
+  const inputBudget = Math.max(512, effectiveContext - reservedOutput - INPUT_SAFETY_MARGIN_TOKENS);
+  const messageBudget = Math.max(384, Math.floor(inputBudget * 0.55));
+
+  const latestUserIndex = (() => {
+    for (let i = source.length - 1; i >= 0; i--) {
+      if (source[i].role === 'user') return i;
+    }
+    return -1;
+  })();
+  if (latestUserIndex < 0) return source.slice(-MAX_RECENT_MESSAGES);
+
+  const selected = [];
+  const selectedIndexes = new Set();
+  let usedTokens = 0;
+  const addWithBudget = (idx, force = false) => {
+    if (idx < 0 || idx >= source.length || selectedIndexes.has(idx)) return false;
+    const item = source[idx];
+    const content = item.content;
+    const tokenCost = estimateTokens(content) + 8;
+    if (!force && usedTokens + tokenCost > messageBudget) return false;
+    selected.unshift({ role: item.role, content });
+    selectedIndexes.add(idx);
+    usedTokens += tokenCost;
+    return true;
+  };
+
+  addWithBudget(latestUserIndex, true);
+
+  for (let i = source.length - 1; i >= 0; i--) {
+    if (i === latestUserIndex) continue;
+    if (selected.length >= MAX_RECENT_MESSAGES) break;
+    addWithBudget(i, false);
+  }
+
+  const dropped = source.filter((_, idx) => !selectedIndexes.has(idx));
+  const session = activeSessionId ? chatSessions.find((s) => s.id === activeSessionId) : null;
+  const memory = mergeSessionMemory(session?.memory || null, buildStructuredSessionMemory(dropped));
+  const memoryText = formatSessionMemory(memory);
+  if (memoryText) {
+    const memoryCost = estimateTokens(memoryText) + 8;
+    if (usedTokens + memoryCost <= messageBudget) {
+      selected.unshift({ role: 'assistant', content: memoryText });
+    }
+  }
+  return selected;
+}
+
+function truncateDocumentContent(text, maxChars) {
+  const raw = String(text || '');
+  if (raw.length <= maxChars) return raw;
+  return `${raw.slice(0, maxChars)}\n\n... [truncated]`;
+}
+
+function buildContextDocumentsForApi(provider) {
+  const fileTabs = tabs.filter((t) => t.type === 'file' && t.path && t.content);
+  if (!fileTabs.length) return [];
+  const activeTab = tabs[activeIndex];
+  const activePath = activeTab?.type === 'file' ? activeTab.path : null;
+  const prioritized = activePath
+    ? [
+        ...fileTabs.filter((t) => t.path === activePath),
+        ...fileTabs.filter((t) => t.path !== activePath),
+      ]
+    : fileTabs;
+
+  const effectiveContext = getProviderEffectiveContextLength(provider);
+  const reservedOutput = getProviderReservedOutputTokens(provider);
+  const inputBudget = Math.max(512, effectiveContext - reservedOutput - INPUT_SAFETY_MARGIN_TOKENS);
+  const docBudget = Math.max(256, Math.floor(inputBudget * 0.4));
+  let used = 0;
+  const docs = [];
+  for (const tab of prioritized) {
+    if (docs.length >= MAX_DOCS_FOR_CONTEXT) break;
+    const content = truncateDocumentContent(tab.content, MAX_DOC_CHARS);
+    const cost = estimateTokens(content) + 12;
+    if (docs.length > 0 && used + cost > docBudget) break;
+    docs.push({ path: tab.path, content });
+    used += cost;
+  }
+  return docs;
 }
 
 let chatSending = false;
@@ -1202,7 +1428,9 @@ window.mdviewer?.onChatStreamDone?.(result => {
   }
 });
 
+const STREAM_FLUSH_THRESHOLD = 32;
 let streamFlushRAF = null;
+let streamPendingChars = 0;
 
 function closeOpenCodeFences(md) {
   const matches = md.match(/^(`{3,})/gm);
@@ -1212,42 +1440,44 @@ function closeOpenCodeFences(md) {
   return md;
 }
 
-function scheduleStreamFlush() {
-  if (streamFlushRAF) return;
+function flushStreamToDOM() {
+  if (!chatMessages) return;
+  const inner = chatMessages.querySelector('.chat-messages-inner');
+  const lastBubble = inner?.querySelector('.chat-bubble:last-child');
+  if (!lastBubble) return;
+  const lastMsg = chatMessagesData[chatMessagesData.length - 1];
+  if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.error) return;
+  const text = lastMsg.content || '';
+  if (lastBubble.classList.contains('loading')) {
+    lastBubble.classList.remove('loading');
+    lastBubble.classList.add('assistant');
+  }
+  let mdWrap = lastBubble.querySelector('.markdown-body');
+  if (!mdWrap) {
+    lastBubble.innerHTML = '';
+    mdWrap = document.createElement('div');
+    mdWrap.className = 'markdown-body';
+    lastBubble.appendChild(mdWrap);
+  }
+  const safeMd = closeOpenCodeFences(text);
+  mdWrap.innerHTML = markedLib.parse(safeMd);
+  let indicator = lastBubble.querySelector('.chat-generating');
+  if (!indicator) {
+    indicator = document.createElement('span');
+    indicator.className = 'chat-generating chat-generating-block';
+    indicator.innerHTML = `<svg class="chat-generating-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a7 7 0 0 1 7 7c0 2.5-1.5 4.5-3 5.5V16a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-1.5C6.5 13.5 5 11.5 5 9a7 7 0 0 1 7-7z"/><path d="M9 21h6"/><path d="M10 17v1a2 2 0 1 0 4 0v-1"/><path d="M12 6v2"/><path d="M9.5 7.5L10.5 9"/><path d="M14.5 7.5L13.5 9"/></svg><span class="chat-generating-text">Generating ...</span>`;
+    lastBubble.appendChild(indicator);
+  }
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function scheduleStreamFlush(force) {
+  if (!force && streamPendingChars < STREAM_FLUSH_THRESHOLD) return;
+  streamPendingChars = 0;
+  if (streamFlushRAF) cancelAnimationFrame(streamFlushRAF);
   streamFlushRAF = requestAnimationFrame(() => {
     streamFlushRAF = null;
-    if (!chatMessages) return;
-    const inner = chatMessages.querySelector('.chat-messages-inner');
-    const lastBubble = inner?.querySelector('.chat-bubble:last-child');
-    if (!lastBubble) return;
-    const lastMsg = chatMessagesData[chatMessagesData.length - 1];
-    if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.error) return;
-    const text = lastMsg.content || '';
-    if (lastBubble.classList.contains('loading')) {
-      lastBubble.classList.remove('loading');
-      lastBubble.classList.add('assistant');
-    }
-    let mdWrap = lastBubble.querySelector('.markdown-body');
-    if (!mdWrap) {
-      lastBubble.innerHTML = '';
-      mdWrap = document.createElement('div');
-      mdWrap.className = 'markdown-body';
-      lastBubble.appendChild(mdWrap);
-    }
-    const safeMd = closeOpenCodeFences(text);
-    mdWrap.innerHTML = markedLib.parse(safeMd);
-    let cursor = lastBubble.querySelector('.chat-stream-cursor');
-    if (!cursor) {
-      cursor = document.createElement('span');
-      cursor.className = 'chat-stream-cursor';
-      cursor.setAttribute('aria-hidden', 'true');
-    }
-    lastBubble.appendChild(cursor);
-    const cm = chatMessages;
-    if (cm) {
-      const atBottom = cm.scrollHeight - cm.scrollTop - cm.clientHeight < 80;
-      if (atBottom) cm.scrollTop = cm.scrollHeight;
-    }
+    flushStreamToDOM();
   });
 }
 
@@ -1256,6 +1486,8 @@ async function sendChatMessage() {
   if (!text || chatSending) return;
   const providerId = chatModelSelect?.value;
   if (!providerId) return;
+  const provider = getSelectedProvider();
+  if (!provider) return;
   chatSending = true;
   chatSendBtn.disabled = true;
   chatMessagesData.push({ role: 'user', content: text });
@@ -1267,10 +1499,14 @@ async function sendChatMessage() {
   chatMessagesData.push(loadingMsg);
   await renderChatMessages();
   scrollChatToShowPromptAtTop();
-  const contextDocuments = tabs
-    .filter((t) => t.type === 'file' && t.content)
-    .map((t) => ({ path: t.path, content: t.content }));
-  const messages = buildMessagesForApi();
+  const contextDocuments = buildContextDocumentsForApi(provider);
+  const messages = buildMessagesForApi(provider);
+  const contextWindow = {
+    maxContextLength: toInt(provider.maxContextLength),
+    loadedContextLength: toInt(provider.loadedContextLength),
+    effectiveContextLength: getProviderEffectiveContextLength(provider),
+    maxOutputTokens: getProviderReservedOutputTokens(provider),
+  };
 
   async function runNonStreaming() {
     try {
@@ -1278,6 +1514,7 @@ async function sendChatMessage() {
         providerId,
         messages,
         contextDocuments,
+        contextWindow,
       });
       chatMessagesData.pop();
       if (res?.error) {
@@ -1298,17 +1535,21 @@ async function sendChatMessage() {
 
   let accumulated = '';
   let streamHandled = false;
+  streamPendingChars = 0;
   streamChunkHandler = (chunk) => {
     accumulated += chunk;
+    streamPendingChars += chunk.length;
     const lastMsg = chatMessagesData[chatMessagesData.length - 1];
     if (lastMsg && lastMsg.role === 'assistant') {
       lastMsg.content = accumulated;
       lastMsg.loading = false;
-      scheduleStreamFlush();
+      scheduleStreamFlush(false);
     }
   };
   streamDoneHandler = async (result) => {
     streamHandled = true;
+    if (streamFlushRAF) { cancelAnimationFrame(streamFlushRAF); streamFlushRAF = null; }
+    streamPendingChars = 0;
     const lastMsg = chatMessagesData[chatMessagesData.length - 1];
     if (result?.error) {
       if (lastMsg && lastMsg.role === 'assistant') {
@@ -1335,6 +1576,7 @@ async function sendChatMessage() {
       providerId,
       messages,
       contextDocuments,
+      contextWindow,
     });
     if (res?.error && !streamHandled) {
       streamChunkHandler = null;
