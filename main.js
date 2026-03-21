@@ -176,6 +176,10 @@ function showFolderDialog() {
   });
 }
 
+ipcMain.handle('open-external', (_, url) => {
+  if (url) shell.openExternal(url);
+});
+
 ipcMain.handle('show-folder-dialog', () => {
   showFolderDialog();
 });

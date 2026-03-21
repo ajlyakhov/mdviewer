@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https: file:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https: file:; frame-src https: http:;">
   <title>MD Viewer</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="node_modules/highlight.js/styles/github.min.css" id="hljs-light">
@@ -37,34 +37,34 @@
         </div>
       </div>
       <div class="viewer-container" id="viewer" style="display:none">
-        <div class="markdown-body" id="markdown"></div>
+        <div class="viewer-markdown" id="viewer-markdown">
+          <div class="markdown-body" id="markdown"></div>
+        </div>
+        <div class="viewer-settings hidden" id="viewer-settings">
+          <div class="settings-panel">
+            <h2 class="settings-title">Settings</h2>
+            <div class="settings-group">
+              <label>Theme</label>
+              <select id="theme" class="theme-select">
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
+            <div class="settings-group">
+              <label>File association</label>
+              <p class="settings-hint">Set MD Viewer as default app for .md files</p>
+              <button type="button" class="btn btn-primary" id="set-default-md">Set as default for .md files</button>
+              <p class="settings-result" id="set-default-result"></p>
+            </div>
+          </div>
+        </div>
+        <div class="viewer-frame hidden" id="viewer-frame">
+          <iframe id="external-frame" sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+        </div>
+        <button type="button" class="back-btn hidden" id="back-btn" title="Back">←</button>
       </div>
     </main>
-  </div>
-
-  <div class="modal-overlay hidden" id="settings-modal">
-    <div class="modal">
-      <div class="modal-header">
-        <h2>Settings</h2>
-        <button class="modal-close" id="settings-close">×</button>
-      </div>
-      <div class="modal-body">
-        <div class="settings-group">
-          <label>Theme</label>
-          <select id="theme" class="theme-select">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </div>
-        <div class="settings-group">
-          <label>File association</label>
-          <p class="settings-hint">Set MD Viewer as default app for .md files</p>
-          <button type="button" class="btn btn-primary" id="set-default-md">Set as default for .md files</button>
-          <p class="settings-result" id="set-default-result"></p>
-        </div>
-      </div>
-    </div>
   </div>
 
   <script src="node_modules/marked/marked.min.js"></script>

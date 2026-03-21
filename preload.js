@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('mdviewer', {
   onOpenSettings: (cb) => ipcRenderer.on('open-settings', () => cb()),
   setDefaultMdApp: () => ipcRenderer.invoke('set-default-md-app'),
   showFolderDialog: () => ipcRenderer.invoke('show-folder-dialog'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   getPathForFile: (file) => {
     if (!file) return '';
     try {

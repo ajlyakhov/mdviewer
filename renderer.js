@@ -22,14 +22,19 @@ const mermaidLib = window.mermaid;
 const dropzone = document.getElementById('dropzone');
 const viewer = document.getElementById('viewer');
 const markdownEl = document.getElementById('markdown');
+const viewerMarkdown = document.getElementById('viewer-markdown');
+const viewerFrame = document.getElementById('viewer-frame');
+const externalFrame = document.getElementById('external-frame');
+const backBtn = document.getElementById('back-btn');
 const tabsEl = document.getElementById('tabs');
 const searchInput = document.getElementById('search-input');
 const themeSelect = document.getElementById('theme');
-const settingsModal = document.getElementById('settings-modal');
-const settingsClose = document.getElementById('settings-close');
+const viewerSettings = document.getElementById('viewer-settings');
 const content = document.querySelector('.content');
 
-let files = [];
+const SETTINGS_TAB = { type: 'settings', name: 'Settings' };
+
+let tabs = [];
 let activeIndex = 0;
 let searchCurrentIndex = 0;
 
@@ -70,23 +75,21 @@ function initTheme() {
 
 // Settings
 function openSettings() {
+  const idx = tabs.findIndex((t) => t.type === 'settings');
+  if (idx >= 0) {
+    activeIndex = idx;
+  } else {
+    tabs.push(SETTINGS_TAB);
+    activeIndex = tabs.length - 1;
+    dropzone.classList.add('hidden');
+    viewer.style.display = 'block';
+  }
   themeSelect.value = getTheme();
   setDefaultResult && (setDefaultResult.textContent = '');
   setDefaultResult && (setDefaultResult.className = 'settings-result');
-  settingsModal.classList.remove('hidden');
+  renderTabs();
+  renderActive();
 }
-
-function closeSettings() {
-  settingsModal.classList.add('hidden');
-}
-
-settingsClose.addEventListener('click', closeSettings);
-settingsModal.addEventListener('click', (e) => {
-  if (e.target === settingsModal) closeSettings();
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !settingsModal.classList.contains('hidden')) closeSettings();
-});
 
 const setDefaultMdBtn = document.getElementById('set-default-md');
 const setDefaultResult = document.getElementById('set-default-result');
@@ -117,7 +120,7 @@ mermaidLib.initialize({
   securityLevel: 'loose',
 });
 
-function resolveRelativePath(basePath, relativePath) {
+function resolvePath(basePath, relativePath) {
   const baseDir = basePath.replace(/[/\\][^/\\]*$/, '') || '/';
   const normalized = (baseDir + '/' + relativePath).replace(/\\/g, '/');
   const parts = normalized.split('/');
@@ -126,8 +129,48 @@ function resolveRelativePath(basePath, relativePath) {
     if (p === '..') resolved.pop();
     else if (p && p !== '.') resolved.push(p);
   }
-  const path = '/' + resolved.join('/');
-  return 'file://' + encodeURI(path);
+  return '/' + resolved.join('/');
+}
+
+function resolveRelativePath(basePath, relativePath) {
+  return 'file://' + encodeURI(resolvePath(basePath, relativePath));
+}
+
+let currentFilePath = null;
+
+function setupLinkHandler() {
+  viewer.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href]');
+    if (!a) return;
+    const href = (a.getAttribute('href') || '').trim();
+    if (!href) return;
+
+    if (href.startsWith('#')) return;
+
+    if (/^https?:\/\//i.test(href)) {
+      e.preventDefault();
+      showExternalUrl(href);
+      return;
+    }
+
+    if (/\.(md|markdown)(?:[#?]|$)/i.test(href)) {
+      e.preventDefault();
+      const pathOnly = href.replace(/[#?].*/, '');
+      const basePath = currentFilePath || tabs[activeIndex]?.path;
+      const resolved = pathOnly.startsWith('/') ? pathOnly : (basePath ? resolvePath(basePath, pathOnly) : null);
+      if (resolved) openOrSwitchToFile(resolved);
+      return;
+    }
+
+    e.preventDefault();
+    const basePath = currentFilePath || tabs[activeIndex]?.path;
+    if (basePath) {
+      const resolved = href.startsWith('/') ? href : resolvePath(basePath, href);
+      window.mdviewer?.openExternal?.(`file://${encodeURI(resolved)}`);
+    } else {
+      window.mdviewer?.openExternal?.(href);
+    }
+  });
 }
 
 function resolveLocalImages(filePath) {
@@ -170,10 +213,20 @@ async function parseAndRender(md, filePath) {
 }
 
 function renderActive() {
-  if (files.length === 0) return;
-  const file = files[activeIndex];
-  parseAndRender(file.content, file.path);
+  if (tabs.length === 0) return;
+  const tab = tabs[activeIndex];
+  hideExternalUrl();
+  if (tab.type === 'settings') {
+    viewerMarkdown?.classList.add('hidden');
+    viewerSettings?.classList.remove('hidden');
+    return;
+  }
+  viewerMarkdown?.classList.remove('hidden');
+  viewerSettings?.classList.add('hidden');
+  currentFilePath = tab.path;
+  parseAndRender(tab.content, tab.path);
   applySearchHighlights(searchInput?.value?.trim() || '');
+  viewerMarkdown?.scrollTo?.(0, 0);
 }
 
 function applySearchHighlights(term) {
@@ -222,11 +275,11 @@ function scrollToSearchMatch(direction) {
 
 // Tabs
 function renderTabs() {
-  tabsEl.innerHTML = files
+  tabsEl.innerHTML = tabs
     .map(
-      (f, i) =>
-        `<div class="tab ${i === activeIndex ? 'active' : ''}" data-index="${i}">
-          <span class="tab-label">${escapeHtml(f.name)}</span>
+      (t, i) =>
+        `<div class="tab ${i === activeIndex ? 'active' : ''}" data-index="${i}" title="${t.path ? escapeHtml(t.path) : ''}">
+          <span class="tab-label">${escapeHtml(t.name)}</span>
           <button type="button" class="tab-close" data-index="${i}" title="Close">×</button>
         </div>`
     )
@@ -247,10 +300,10 @@ function renderTabs() {
       e.stopPropagation();
       e.preventDefault();
       const idx = parseInt(btn.dataset.index, 10);
-      files.splice(idx, 1);
-      if (activeIndex >= files.length) activeIndex = Math.max(0, files.length - 1);
+      tabs.splice(idx, 1);
+      if (activeIndex >= tabs.length) activeIndex = Math.max(0, tabs.length - 1);
       if (activeIndex > idx) activeIndex--;
-      if (files.length === 0) {
+      if (tabs.length === 0) {
         dropzone.classList.remove('hidden');
         viewer.style.display = 'none';
       } else {
@@ -278,16 +331,29 @@ async function loadFile(path) {
   }
 }
 
+async function openOrSwitchToFile(path) {
+  const idx = tabs.findIndex((t) => t.type === 'file' && t.path === path);
+  if (idx >= 0) {
+    activeIndex = idx;
+    renderTabs();
+    renderActive();
+    return;
+  }
+  await openFiles([path]);
+}
+
 async function openFiles(paths) {
   if (!paths?.length) return;
-  const newFiles = [];
+  const newTabs = [];
   for (const p of paths) {
     const f = await loadFile(p);
-    if (f && !files.some((x) => x.path === f.path)) newFiles.push(f);
+    if (f && !tabs.some((t) => t.type === 'file' && t.path === f.path)) {
+      newTabs.push({ type: 'file', ...f });
+    }
   }
-  if (newFiles.length === 0) return;
-  files.push(...newFiles);
-  activeIndex = files.length - newFiles.length;
+  if (newTabs.length === 0) return;
+  tabs.push(...newTabs);
+  activeIndex = tabs.length - newTabs.length;
   dropzone.classList.add('hidden');
   viewer.style.display = 'block';
   renderTabs();
@@ -363,7 +429,7 @@ function setupDragDrop(el) {
 document.getElementById('dropzone-open')?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
-  if (files.length === 0) window.mdviewer?.showFolderDialog?.();
+  if (tabs.length === 0) window.mdviewer?.showFolderDialog?.();
 });
 
 // Attach drop to document so it works everywhere (including when viewer is shown)
@@ -374,6 +440,24 @@ setupDragDrop(dropzone);
 window.mdviewer?.onOpenFile?.((path) => openFiles([path]));
 window.mdviewer?.onOpenFiles?.((paths) => openFiles(paths));
 window.mdviewer?.onOpenFolder?.(openFolder);
+
+function showExternalUrl(url) {
+  viewerMarkdown?.classList.add('hidden');
+  viewerFrame?.classList.remove('hidden');
+  backBtn?.classList.remove('hidden');
+  externalFrame?.setAttribute('src', url);
+}
+
+function hideExternalUrl() {
+  viewerMarkdown?.classList.remove('hidden');
+  viewerFrame?.classList.add('hidden');
+  backBtn?.classList.add('hidden');
+  externalFrame?.removeAttribute('src');
+}
+
+backBtn?.addEventListener('click', hideExternalUrl);
+
+setupLinkHandler();
 
 // Search
 searchInput?.addEventListener('input', () => {
