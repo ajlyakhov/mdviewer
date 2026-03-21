@@ -1,7 +1,7 @@
 {
   "name": "mdviewer",
   "version": "2.0.0",
-  "description": "AI-first Markdown workspace with local-document chat, recency-first context control, and Mermaid support",
+  "description": "AI-first, local-first Markdown copilot with context-aware chat and Mermaid support",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

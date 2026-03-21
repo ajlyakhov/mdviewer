@@ -1,6 +1,6 @@
-# MD Viewer
+# MD Viewer: AI-first Markdown Copilot
 
-AI-first Markdown workspace on macOS: open docs locally, inspect diagrams/code, and chat with an LLM that is explicitly optimized to prioritize your latest question.
+MD Viewer is an AI-first, local-first markdown copilot for macOS: open docs, inspect diagrams/code, and chat with an LLM that is optimized to prioritize your latest question.
 
 ## Objective
 
