@@ -42,14 +42,23 @@ body {
 }
 
 .titlebar {
-  -webkit-app-region: drag;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
 }
 
-.titlebar-drag {
+.titlebar-row {
+  display: flex;
+  align-items: center;
   height: 38px;
+  padding: 0 12px 0 0;
+  gap: 8px;
+}
+
+.titlebar-spacer {
+  flex: 1;
+  min-width: 78px;
+  -webkit-app-region: drag;
 }
 
 .toolbar {
@@ -77,6 +86,7 @@ body {
 
 .search-box {
   flex-shrink: 0;
+  -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -85,7 +95,7 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   min-width: 140px;
-  max-width: 220px;
+  max-width: 200px;
 }
 
 .search-icon {
@@ -164,6 +174,7 @@ html[data-theme="dark"] .tab-close:hover { background: rgba(255,255,255,0.1); }
   justify-content: center;
   background: var(--bg);
   transition: opacity 0.2s;
+  cursor: pointer;
 }
 
 .dropzone.hidden {

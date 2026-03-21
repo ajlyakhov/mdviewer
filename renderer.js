@@ -114,6 +114,30 @@ setDefaultMdBtn?.addEventListener('click', async () => {
 
 window.mdviewer?.onOpenSettings?.(openSettings);
 
+window.mdviewer?.onTabContextAction?.(({ action, index }) => {
+  if (action === 'close') {
+    closeTab(index);
+  } else if (action === 'closeOthers') {
+    tabs = [tabs[index]];
+    activeIndex = 0;
+    renderTabs();
+    renderActive();
+  }
+});
+
+function closeTab(idx) {
+  tabs.splice(idx, 1);
+  if (activeIndex >= tabs.length) activeIndex = Math.max(0, tabs.length - 1);
+  if (activeIndex > idx) activeIndex--;
+  if (tabs.length === 0) {
+    dropzone.classList.remove('hidden');
+    viewer.style.display = 'none';
+  } else {
+    renderActive();
+  }
+  renderTabs();
+}
+
 mermaidLib.initialize({
   startOnLoad: false,
   theme: 'default',
@@ -293,23 +317,17 @@ function renderTabs() {
       renderTabs();
       renderActive();
     });
+    tab.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      window.mdviewer?.showTabContextMenu?.(idx);
+    });
   });
 
   tabsEl.querySelectorAll('.tab-close').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const idx = parseInt(btn.dataset.index, 10);
-      tabs.splice(idx, 1);
-      if (activeIndex >= tabs.length) activeIndex = Math.max(0, tabs.length - 1);
-      if (activeIndex > idx) activeIndex--;
-      if (tabs.length === 0) {
-        dropzone.classList.remove('hidden');
-        viewer.style.display = 'none';
-      } else {
-        renderTabs();
-        renderActive();
-      }
+      closeTab(parseInt(btn.dataset.index, 10));
     });
   });
 }
@@ -426,7 +444,7 @@ function setupDragDrop(el) {
 }
 
 // Dropzone icon click - open folder dialog
-document.getElementById('dropzone-open')?.addEventListener('click', (e) => {
+dropzone?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   if (tabs.length === 0) window.mdviewer?.showFolderDialog?.();

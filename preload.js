@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('mdviewer', {
   setDefaultMdApp: () => ipcRenderer.invoke('set-default-md-app'),
   showFolderDialog: () => ipcRenderer.invoke('show-folder-dialog'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  showTabContextMenu: (index) => ipcRenderer.invoke('show-tab-context-menu', index),
+  onTabContextAction: (cb) => ipcRenderer.on('tab-context-action', (_, data) => cb(data)),
   getPathForFile: (file) => {
     if (!file) return '';
     try {

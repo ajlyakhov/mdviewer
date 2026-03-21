@@ -180,6 +180,22 @@ ipcMain.handle('open-external', (_, url) => {
   if (url) shell.openExternal(url);
 });
 
+ipcMain.handle('show-tab-context-menu', (event, index) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  const menu = Menu.buildFromTemplate([
+    {
+      label: 'Close Tab',
+      click: () => event.sender.send('tab-context-action', { action: 'close', index }),
+    },
+    {
+      label: 'Close All Other Tabs',
+      click: () => event.sender.send('tab-context-action', { action: 'closeOthers', index }),
+    },
+  ]);
+  menu.popup({ window: win });
+});
+
 ipcMain.handle('show-folder-dialog', () => {
   showFolderDialog();
 });
