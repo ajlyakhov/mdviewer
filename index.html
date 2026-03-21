@@ -14,6 +14,7 @@
     <header class="titlebar">
       <div class="titlebar-row">
         <div class="titlebar-spacer"></div>
+        <button type="button" class="talk-to-doc-btn" id="talk-to-doc-btn" title="Talk to your document">Talk to your doc</button>
         <div class="search-box">
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
@@ -58,6 +59,107 @@
               <p class="settings-hint">Set MD Viewer as default app for .md files</p>
               <button type="button" class="btn btn-primary" id="set-default-md">Set as default for .md files</button>
               <p class="settings-result" id="set-default-result"></p>
+            </div>
+            <div class="settings-group ai-settings-group">
+              <div class="ai-section ai-models-section">
+                <h3 class="ai-section-title">Models</h3>
+                <div class="ai-search-row">
+                  <input type="text" id="ai-model-search" class="ai-search-input" placeholder="Add or search model" autocomplete="off">
+                  <button type="button" class="ai-refresh-btn ai-add-btn" id="ai-add-model-btn" title="Add model">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                  </button>
+                  <button type="button" class="ai-refresh-btn" id="ai-refresh-models" title="Refresh">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4v5h5M20 20v-5h-5M4 12a8 8 0 0114.5-4M20 12a8 8 0 01-14.5 4"/></svg>
+                  </button>
+                </div>
+                <div id="ai-models-list" class="ai-models-list"></div>
+              </div>
+              <div class="ai-section ai-keys-section collapsed">
+                <button type="button" class="ai-collapse-header" id="ai-keys-collapse">
+                  <svg class="ai-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                  <span>API Keys</span>
+                </button>
+                <div class="ai-keys-content" id="ai-keys-content">
+                  <div class="ai-key-block">
+                    <div class="ai-key-header">
+                      <span class="ai-key-title">OpenAI API Key</span>
+                    </div>
+                    <p class="ai-key-desc">Use OpenAI models (GPT-4, etc.) at cost.</p>
+                    <input type="password" id="ai-key-openai" class="ai-key-input" placeholder="Enter your OpenAI API Key">
+                  </div>
+                  <div class="ai-key-block">
+                    <div class="ai-key-header">
+                      <span class="ai-key-title">Anthropic API Key</span>
+                    </div>
+                    <p class="ai-key-desc">Use Claude models at cost.</p>
+                    <input type="password" id="ai-key-anthropic" class="ai-key-input" placeholder="Enter your Anthropic API Key">
+                  </div>
+                  <div class="ai-key-block">
+                    <div class="ai-key-header">
+                      <span class="ai-key-title">Google API Key</span>
+                    </div>
+                    <p class="ai-key-desc">Use Google AI (Gemini) models at cost.</p>
+                    <input type="password" id="ai-key-google" class="ai-key-input" placeholder="Enter your Google AI Studio key">
+                  </div>
+                </div>
+              </div>
+              <div id="ai-add-model-form" class="ai-add-form hidden">
+                <div class="ai-add-form-inner">
+                  <h4 class="ai-add-form-title">Add model</h4>
+                  <select id="ai-add-type" class="theme-select">
+                    <option value="lmstudio">LM Studio</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="claude">Claude</option>
+                    <option value="google">Google AI</option>
+                  </select>
+                  <div id="ai-add-lmstudio-wrap" class="ai-add-model-wrap hidden">
+                    <select id="ai-add-lmstudio-model" class="theme-select" disabled>
+                      <option value="">Loading models...</option>
+                    </select>
+                    <p class="ai-add-model-hint" id="ai-add-lmstudio-hint"></p>
+                  </div>
+                  <div id="ai-add-cloud-wrap" class="ai-add-model-wrap hidden">
+                    <select id="ai-add-cloud-model" class="theme-select" disabled>
+                      <option value="">Loading models...</option>
+                    </select>
+                    <p class="ai-add-model-hint" id="ai-add-cloud-hint"></p>
+                  </div>
+                  <div id="ai-add-manual-wrap" class="ai-add-model-wrap">
+                    <input type="text" id="ai-add-model-id" class="theme-select" placeholder="Model ID">
+                  </div>
+                  <div class="ai-form-actions">
+                    <button type="button" class="btn btn-primary" id="ai-add-save">Add</button>
+                    <button type="button" class="btn" id="ai-add-cancel">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="viewer-chat hidden" id="viewer-chat">
+          <div class="chat-messages" id="chat-messages"></div>
+          <div class="chat-input-area" id="chat-input-area">
+            <div class="chat-control-bar">
+              <div class="chat-input-row">
+                <button type="button" class="chat-new-btn" id="chat-new-btn" title="New chat">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 4v16M4 12h16"/>
+                  </svg>
+                </button>
+                <textarea id="chat-input" class="chat-input" placeholder="Ask anything" rows="1"></textarea>
+                <button type="button" id="chat-send" class="chat-send-btn">Send</button>
+              </div>
+              <div class="chat-model-row">
+                <div class="chat-model-dropdown" id="chat-model-dropdown">
+                  <button type="button" class="chat-model-trigger" id="chat-model-trigger">Select model</button>
+                  <div class="chat-model-menu hidden" id="chat-model-menu"></div>
+                </div>
+                <select id="chat-model-select" class="chat-model-select" tabindex="-1" aria-hidden="true"></select>
+                <div class="chat-sessions-dropdown" id="chat-sessions-dropdown">
+                  <button type="button" class="chat-sessions-trigger" id="chat-sessions-trigger" title="Sessions">Sessions ▾</button>
+                  <div class="chat-sessions-menu hidden" id="chat-sessions-menu"></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

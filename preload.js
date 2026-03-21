@@ -16,6 +16,22 @@ contextBridge.exposeInMainWorld('mdviewer', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   showTabContextMenu: (index) => ipcRenderer.invoke('show-tab-context-menu', index),
   onTabContextAction: (cb) => ipcRenderer.on('tab-context-action', (_, data) => cb(data)),
+  getAiConfig: () => ipcRenderer.invoke('get-ai-config'),
+  saveAiConfig: (config) => ipcRenderer.invoke('save-ai-config', config),
+  chatCompletion: (args) => ipcRenderer.invoke('chat-completion', args),
+  chatCompletionStream: (args) => ipcRenderer.invoke('chat-completion-stream', args),
+  onChatStreamChunk: (cb) => ipcRenderer.on('chat-stream-chunk', (_, chunk) => cb(chunk)),
+  onChatStreamDone: (cb) => ipcRenderer.on('chat-stream-done', (_, result) => cb(result)),
+  getChatMessages: () => ipcRenderer.invoke('get-chat-messages'),
+  saveChatMessages: (messages) => ipcRenderer.invoke('save-chat-messages', messages),
+  getChatSessions: () => ipcRenderer.invoke('get-chat-sessions'),
+  saveChatSessions: (data) => ipcRenderer.invoke('save-chat-sessions', data),
+  getOpenTabs: () => ipcRenderer.invoke('get-open-tabs'),
+  saveOpenTabs: (state) => ipcRenderer.invoke('save-open-tabs', state),
+  fetchLmStudioModels: (baseUrl) => ipcRenderer.invoke('fetch-lmstudio-models', baseUrl),
+  fetchOpenAIModels: (apiKey) => ipcRenderer.invoke('fetch-openai-models', apiKey),
+  fetchAnthropicModels: (apiKey) => ipcRenderer.invoke('fetch-anthropic-models', apiKey),
+  fetchGoogleModels: (apiKey) => ipcRenderer.invoke('fetch-google-models', apiKey),
   getPathForFile: (file) => {
     if (!file) return '';
     try {
