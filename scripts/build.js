@@ -25,7 +25,7 @@ if (!fs.existsSync(distDir)) fs.mkdirSync(distDir, { recursive: true });
 
 // Run electron-builder
 console.log('Building MD Viewer for macOS...');
-execSync('npx electron-builder --mac', {
+execSync('npx electron-builder --mac --publish never', {
   cwd: root,
   stdio: 'inherit',
 });

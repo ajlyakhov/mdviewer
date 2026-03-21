@@ -10,7 +10,8 @@ Electron app for viewing Markdown files with Mermaid diagram support on macOS.
 - Tabbed interface (closeable tabs)
 - Search within active tab (case-insensitive, highlights matches)
 - Mermaid diagrams in markdown
-- External images (HTTPS URLs in markdown)
+- External images (HTTPS URLs)
+- Local images (relative paths resolve to file, e.g. `![](assets/banner.webp)`)
 - Themes: Light, Dark, System
 - Syntax highlighting for code blocks
 

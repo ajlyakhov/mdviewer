@@ -117,7 +117,31 @@ mermaidLib.initialize({
   securityLevel: 'loose',
 });
 
-async function parseAndRender(md) {
+function resolveRelativePath(basePath, relativePath) {
+  const baseDir = basePath.replace(/[/\\][^/\\]*$/, '') || '/';
+  const normalized = (baseDir + '/' + relativePath).replace(/\\/g, '/');
+  const parts = normalized.split('/');
+  const resolved = [];
+  for (const p of parts) {
+    if (p === '..') resolved.pop();
+    else if (p && p !== '.') resolved.push(p);
+  }
+  const path = '/' + resolved.join('/');
+  return 'file://' + encodeURI(path);
+}
+
+function resolveLocalImages(filePath) {
+  if (!filePath) return;
+  markdownEl.querySelectorAll('img[src]').forEach((img) => {
+    const src = img.getAttribute('src');
+    if (!src || /^(https?:|data:|blob:|#)/i.test(src)) return;
+    img.src = src.startsWith('/')
+      ? 'file://' + encodeURI(src)
+      : resolveRelativePath(filePath, src);
+  });
+}
+
+async function parseAndRender(md, filePath) {
   const mermaidBlocks = [];
   const placeholder = '___MERMAID_PLACEHOLDER_';
   let processed = md.replace(/```mermaid\n([\s\S]*?)```/g, (_, code) => {
@@ -128,6 +152,7 @@ async function parseAndRender(md) {
 
   const html = markedLib.parse(processed);
   markdownEl.innerHTML = html;
+  resolveLocalImages(filePath);
 
   const theme = getTheme() === 'system' ? getSystemTheme() : getTheme();
   mermaidLib.initialize({ startOnLoad: false, theme: theme === 'dark' ? 'dark' : 'default' });
@@ -146,7 +171,8 @@ async function parseAndRender(md) {
 
 function renderActive() {
   if (files.length === 0) return;
-  parseAndRender(files[activeIndex].content);
+  const file = files[activeIndex];
+  parseAndRender(file.content, file.path);
   applySearchHighlights(searchInput?.value?.trim() || '');
 }
 
