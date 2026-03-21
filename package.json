@@ -1,0 +1,52 @@
+{
+  "name": "mdviewer",
+  "version": "1.0.0",
+  "description": "Markdown viewer with Mermaid support",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-icon": "node scripts/build-icon.js",
+    "build": "node scripts/build.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "author": "Alexander Lyakhov",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "sharp": "^0.33.5"
+  },
+  "dependencies": {
+    "highlight.js": "^11.9.0",
+    "marked": "^11.0.0",
+    "mermaid": "^10.6.1"
+  },
+  "build": {
+    "appId": "com.mdviewer.app",
+    "productName": "MD Viewer",
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown",
+        "role": "Viewer"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown",
+        "role": "Viewer"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/icon.icns"
+    },
+    "dmg": {
+      "title": "${productName} ${version}"
+    }
+  }
+}
