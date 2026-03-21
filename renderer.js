@@ -1,5 +1,22 @@
-const markedLib = window.marked;
 const hljsLib = window.hljs;
+const { Marked } = window.marked;
+const { markedHighlight } = window.markedHighlight;
+
+const markedLib = {
+  parse: (md) =>
+    new Marked(
+      markedHighlight({
+        langPrefix: 'hljs language-',
+        emptyLangClass: 'hljs',
+        highlight(code, lang) {
+          if (lang && hljsLib.getLanguage(lang)) {
+            return hljsLib.highlight(code, { language: lang }).value;
+          }
+          return hljsLib.highlightAuto(code).value;
+        },
+      })
+    ).parse(md),
+};
 const mermaidLib = window.mermaid;
 
 const dropzone = document.getElementById('dropzone');
@@ -93,16 +110,6 @@ setDefaultMdBtn?.addEventListener('click', async () => {
 });
 
 window.mdviewer?.onOpenSettings?.(openSettings);
-
-// Marked
-markedLib.setOptions({
-  highlight: (code, lang) => {
-    if (lang && hljsLib.getLanguage(lang)) {
-      return hljsLib.highlight(code, { language: lang }).value;
-    }
-    return hljsLib.highlightAuto(code).value;
-  },
-});
 
 mermaidLib.initialize({
   startOnLoad: false,

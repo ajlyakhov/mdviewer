@@ -10,6 +10,7 @@ Electron app for viewing Markdown files with Mermaid diagram support on macOS.
 - Tabbed interface (closeable tabs)
 - Search within active tab (case-insensitive, highlights matches)
 - Mermaid diagrams in markdown
+- External images (HTTPS URLs in markdown)
 - Themes: Light, Dark, System
 - Syntax highlighting for code blocks
 
@@ -39,4 +40,7 @@ npm run build
 ```
 
 Produces DMG and ZIP in `dist/`.
-# mdviewer
+
+## License
+
+MIT — see [LICENSE](LICENSE).

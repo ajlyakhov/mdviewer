@@ -1,6 +1,6 @@
 {
   "name": "mdviewer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Markdown viewer with Mermaid support",
   "main": "main.js",
   "scripts": {
@@ -20,6 +20,7 @@
   "dependencies": {
     "highlight.js": "^11.9.0",
     "marked": "^11.0.0",
+    "marked-highlight": "^2.2.3",
     "mermaid": "^10.6.1"
   },
   "build": {

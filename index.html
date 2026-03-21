@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:;">
   <title>MD Viewer</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="node_modules/highlight.js/styles/github.min.css" id="hljs-light">
@@ -68,6 +68,7 @@
   </div>
 
   <script src="node_modules/marked/marked.min.js"></script>
+  <script src="node_modules/marked-highlight/lib/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="renderer.js"></script>
