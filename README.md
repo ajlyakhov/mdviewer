@@ -32,6 +32,29 @@ MD Viewer is no longer just a markdown renderer. The core goal is reliable AI-as
 - Themes: Light, Dark, System
 - Syntax highlighting for code blocks
 
+## Knowledgebase Embedding Logic
+
+Knowledgebase indexing/search embedding backend is resolved with this order:
+
+1. **LM Studio provider enabled**
+   - Uses LM Studio only if an embedding model is selected in the LM Studio model config.
+   - If no LM Studio embedding model is selected, falls back to MiniLM.
+   - If selected LM Studio embedding model is unavailable/unreachable, falls back to MiniLM.
+2. **OpenAI provider enabled**
+   - Uses OpenAI embeddings (`text-embedding-3-small`).
+   - If OpenAI embedding request fails at runtime, falls back to MiniLM.
+3. **Fallback**
+   - Uses in-app MiniLM (`Xenova/all-MiniLM-L6-v2`).
+
+### LM Studio model setup behavior
+
+- Add Model -> LM Studio now has two independent dropdowns:
+  - **Model for responses** (required for chat provider)
+  - **Model for embeddings** (optional)
+- If LM Studio reports available embedding models, one is preselected automatically.
+- User can still explicitly choose MiniLM by selecting the fallback option.
+- LM Studio URL defaults to `http://localhost:1234` with accessibility auto-detection.
+
 ## LLM Context Strategy (v2)
 
 The chat pipeline now uses a recency-first, token-budgeted strategy so the model stays focused on your latest question even in long threads.

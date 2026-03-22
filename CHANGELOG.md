@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-03-22
+
+### Added
+
+- Knowledgebase embedding provenance per indexed document: backend, model, and embed timestamp.
+- LM Studio add-model flow now supports separate selections for response and embedding models.
+- LM Studio URL input in model onboarding with auto-access detection and status lamp.
+- Inline Knowledgebase import row statuses (`Pending`, `Loading...`, `Imported`, `Skipped`, `Failed`) with placeholder rows for in-flight files.
+
+### Changed
+
+- Knowledgebase embedding backend resolution now follows strict priority:
+  - LM Studio (if enabled and embedding model selected/available) -> OpenAI (if enabled) -> MiniLM fallback.
+- OpenAI embedding path now degrades to MiniLM on runtime embedding failures.
+- Removed global Knowledgebase backend banner in Settings; embedding source is now shown per document row.
+- Models settings no longer uses separate API key section; non-local providers use strict check-first wizard.
+- All Settings top-level groups (`General`, `Models`, `Knowledgebase`) remain collapsed when opened.
+
 ## [2.1.0] - 2026-03-21
 
 ### Added
