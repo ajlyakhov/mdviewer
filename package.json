@@ -1,6 +1,6 @@
 {
   "name": "mdviewer",
-  "version": "2.2.2",
+  "version": "3.0.0",
   "description": "AI-first, local-first Markdown copilot with context-aware chat and Mermaid support",
   "main": "main.js",
   "scripts": {
