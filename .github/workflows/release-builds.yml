@@ -46,7 +46,7 @@ jobs:
           node -e "const fs=require('fs'); const files=['package.json','package-lock.json']; for (const file of files) { if (!fs.existsSync(file)) continue; const pkg=JSON.parse(fs.readFileSync(file,'utf8')); pkg.version=process.env.RELEASE_VERSION; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n'); }"
 
       - name: Build binaries
-        run: npm run dist -- ${{ matrix.build_flag }}
+        run: npm run dist -- ${{ matrix.build_flag }} --publish never
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
