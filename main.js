@@ -545,23 +545,122 @@ ipcMain.handle('save-ai-config', (_, { aiProviders, aiApiKeys }) => {
   return { ok: true };
 });
 
-function getLmStudioEmbeddingConfig() {
+async function resolveKnowledgebaseEmbeddingProviderConfig() {
   const providers = store.get('aiProviders', []);
   const apiKeys = store.get('aiApiKeys', {});
   const kb = store.get('knowledgebase', {});
-  const lmProvider = providers.find((p) => p.type === 'lmstudio');
-  const baseUrl = lmProvider?.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
+  const topK = Number(kb.topK) > 0 ? Number(kb.topK) : 12;
+  const maxPerDocument = Number(kb.maxPerDocument) > 0 ? Number(kb.maxPerDocument) : 3;
+  const lmProvider = providers.find((p) => p.type === 'lmstudio' && p.enabled !== false);
+  const openAiProvider = providers.find((p) => p.type === 'openai' && p.enabled !== false);
+  const lmConfigured = Boolean(lmProvider);
+  const openAiConfigured = Boolean(openAiProvider);
+  const openAiApiKey = openAiConfigured ? (openAiProvider?.apiKey || apiKeys.openai?.apiKey || '') : '';
+
+  if (lmConfigured) {
+    const baseUrl = lmProvider?.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
+    const selectedEmbeddingModel = String(lmProvider?.embeddingModel || '').trim();
+    if (!selectedEmbeddingModel) {
+      return {
+        provider: { type: 'minilm' },
+        topK,
+        maxPerDocument,
+        status: {
+          backend: 'minilm',
+          label: 'MiniLM (fallback)',
+          detail: 'LM Studio is configured but no embedding model is selected. Using MiniLM.',
+        },
+      };
+    }
+    const availableModel = await resolveLmStudioEmbeddingModel(baseUrl, selectedEmbeddingModel);
+    if (availableModel) {
+      return {
+        provider: {
+          type: 'lmstudio',
+          baseUrl,
+          model: availableModel,
+          allowMiniLmFallback: true,
+        },
+        topK,
+        maxPerDocument,
+        status: {
+          backend: 'lmstudio',
+          label: `LM Studio (${availableModel})`,
+          detail: `Using LM Studio embeddings at ${baseUrl}`,
+        },
+      };
+    }
+    return {
+      provider: { type: 'minilm' },
+      topK,
+      maxPerDocument,
+      status: {
+        backend: 'minilm',
+        label: 'MiniLM (fallback)',
+        detail: 'LM Studio is configured but no embedding model is loaded.',
+      },
+    };
+  }
+
+  if (openAiConfigured && openAiApiKey) {
+    return {
+      provider: {
+        type: 'openai',
+        apiKey: openAiApiKey,
+        model: 'text-embedding-3-small',
+        allowMiniLmFallback: true,
+      },
+      topK,
+      maxPerDocument,
+      status: {
+        backend: 'openai',
+        label: 'OpenAI (text-embedding-3-small)',
+        detail: 'Using OpenAI embeddings (LM Studio not configured).',
+      },
+    };
+  }
+
   return {
-    baseUrl,
-    model: kb.embeddingModel || DEFAULT_EMBEDDING_MODEL,
-    topK: Number(kb.topK) > 0 ? Number(kb.topK) : 12,
-    maxPerDocument: Number(kb.maxPerDocument) > 0 ? Number(kb.maxPerDocument) : 3,
+    provider: { type: 'minilm' },
+    topK,
+    maxPerDocument,
+    status: {
+      backend: 'minilm',
+      label: 'MiniLM (local fallback)',
+      detail: 'No LM Studio/OpenAI embedding provider configured.',
+    },
   };
+}
+
+async function resolveLmStudioEmbeddingModel(baseUrl, preferredModel) {
+  try {
+    let url = String(baseUrl || 'http://127.0.0.1:1234').replace(/\/$/, '').replace(/localhost/gi, '127.0.0.1');
+    url = url.endsWith('/api/v1') ? url : `${url}/api/v1`;
+    const apiUrl = `${url}/models`;
+    const { ok, data } = await httpGet(apiUrl);
+    if (!ok || !data) return null;
+    const list = data?.models ?? data?.data ?? (Array.isArray(data) ? data : []);
+    const embeddingModels = list.filter((m) => m.type === 'embedding');
+    if (!embeddingModels.length) return null;
+    const preferred = String(preferredModel || '').trim();
+    if (preferred) {
+      const found = embeddingModels.find((m) => {
+        const id = m.key ?? m.id ?? m.name ?? m.model;
+        return id === preferred;
+      });
+      if (!found) return null;
+      return found.key ?? found.id ?? found.name ?? found.model ?? null;
+    }
+    const first = embeddingModels[0];
+    return first.key ?? first.id ?? first.name ?? first.model ?? null;
+  } catch (_) {
+    return null;
+  }
 }
 
 async function importFilesToKnowledgebase(filePaths = [], onProgress) {
   if (!knowledgebase) return { ok: false, error: 'Knowledgebase unavailable' };
-  const cfg = getLmStudioEmbeddingConfig();
+  const cfg = await resolveKnowledgebaseEmbeddingProviderConfig();
   const files = [...new Set((filePaths || []).filter((p) => /\.(md|markdown)$/i.test(String(p || ''))))];
   let imported = 0;
   let skipped = 0;
@@ -578,8 +677,7 @@ async function importFilesToKnowledgebase(filePaths = [], onProgress) {
       const res = await knowledgebase.addDocument({
         path: filePath,
         content,
-        baseUrl: cfg.baseUrl,
-        model: cfg.model,
+        embeddingProvider: cfg.provider,
         replacePathVersions: true,
       });
       if (res?.alreadyExists) {
@@ -615,12 +713,11 @@ ipcMain.handle('kb-get-document-status', async (_, { path: docPath, content }) =
 ipcMain.handle('kb-add-document', async (_, { path: docPath, content, replacePathVersions }) => {
   if (!knowledgebase) return { ok: false, error: 'Knowledgebase unavailable' };
   try {
-    const cfg = getLmStudioEmbeddingConfig();
+    const cfg = await resolveKnowledgebaseEmbeddingProviderConfig();
     const result = await knowledgebase.addDocument({
       path: docPath,
       content,
-      baseUrl: cfg.baseUrl,
-      model: cfg.model,
+      embeddingProvider: cfg.provider,
       replacePathVersions: Boolean(replacePathVersions),
     });
     return { ok: true, ...result };
@@ -695,17 +792,29 @@ ipcMain.handle('kb-clear-all', async () => {
 ipcMain.handle('kb-build-context', async (_, { query }) => {
   if (!knowledgebase) return { contextDocuments: [] };
   try {
-    const cfg = getLmStudioEmbeddingConfig();
+    const cfg = await resolveKnowledgebaseEmbeddingProviderConfig();
     const { contextDocuments, references } = await knowledgebase.buildContextDocuments({
       query,
-      baseUrl: cfg.baseUrl,
-      model: cfg.model,
+      provider: cfg.provider,
       topK: cfg.topK,
       maxPerDocument: cfg.maxPerDocument,
     });
     return { contextDocuments, references };
   } catch (err) {
     return { contextDocuments: [], references: [], error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kb-get-embedding-backend-status', async () => {
+  try {
+    const cfg = await resolveKnowledgebaseEmbeddingProviderConfig();
+    return cfg?.status || { backend: 'unknown', label: 'Unknown backend', detail: '' };
+  } catch (err) {
+    return {
+      backend: 'unknown',
+      label: 'Unknown backend',
+      detail: err?.message || String(err),
+    };
   }
 });
 
@@ -861,6 +970,50 @@ ipcMain.handle('fetch-lmstudio-models', async (_, baseUrl) => {
     return { models };
   } catch (e) {
     return { models: [], error: e.message };
+  }
+});
+
+ipcMain.handle('check-lmstudio-availability', async (_, baseUrl) => {
+  try {
+    let url = (baseUrl || 'http://127.0.0.1:1234').replace(/\/$/, '').replace(/localhost/gi, '127.0.0.1');
+    url = url.endsWith('/api/v1') ? url : `${url}/api/v1`;
+    const apiUrl = `${url}/models`;
+    const { ok, data } = await httpGet(apiUrl);
+    if (!ok || !data) {
+      return { ok: false, error: data?.raw || 'Request failed' };
+    }
+    const list = data?.models ?? data?.data ?? (Array.isArray(data) ? data : []);
+    const llmModels = list.filter((m) => m.type === 'llm').map((m) => ({
+      id: m.key ?? m.id ?? m.name ?? m.model,
+      name: m.display_name ?? m.key ?? m.id ?? m.name ?? m.model,
+      maxContextLength: m.max_context_length ?? m.context_length ?? m.maxContextLength ?? null,
+      loadedContextLength:
+        m.loaded_instances?.[0]?.config?.context_length ??
+        m.loadedInstances?.[0]?.config?.contextLength ??
+        null,
+      effectiveContextLength:
+        m.loaded_instances?.[0]?.config?.context_length ??
+        m.loadedInstances?.[0]?.config?.contextLength ??
+        m.max_context_length ??
+        m.context_length ??
+        m.maxContextLength ??
+        null,
+    }));
+    const embeddingModels = list.filter((m) => m.type === 'embedding').map((m) => ({
+      id: m.key ?? m.id ?? m.name ?? m.model,
+      name: m.display_name ?? m.key ?? m.id ?? m.name ?? m.model,
+    }));
+    return {
+      ok: true,
+      llmModels,
+      embeddingModels,
+      hasLlm: llmModels.length > 0,
+      hasEmbedding: embeddingModels.length > 0,
+      recommendedChatModels: ['qwen2.5-7b-instruct', 'llama-3.1-8b-instruct', 'mistral-7b-instruct'],
+      recommendedEmbeddingModels: ['nomic-embed-text-v1.5', 'mxbai-embed-large-v1'],
+    };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
   }
 });
 

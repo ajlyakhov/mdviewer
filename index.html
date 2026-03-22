@@ -54,114 +54,117 @@
         <div class="viewer-settings hidden" id="viewer-settings">
           <div class="settings-panel">
             <h2 class="settings-title">Settings</h2>
-            <div class="settings-group">
-              <label>Theme</label>
-              <select id="theme" class="theme-select">
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </div>
-            <div class="settings-group">
-              <label>File association</label>
-              <p class="settings-hint">Set MD Viewer as default app for .md files</p>
-              <button type="button" class="btn btn-primary" id="set-default-md">Set as default for .md files</button>
-              <p class="settings-result" id="set-default-result"></p>
-            </div>
-            <div class="settings-group ai-settings-group">
-              <div class="ai-section ai-models-section">
-                <h3 class="ai-section-title">Models</h3>
-                <div class="ai-search-row">
-                  <input type="text" id="ai-model-search" class="ai-search-input" placeholder="Add or search model" autocomplete="off">
-                  <button type="button" class="ai-refresh-btn ai-add-btn" id="ai-add-model-btn" title="Add model">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-                  </button>
-                  <button type="button" class="ai-refresh-btn" id="ai-refresh-models" title="Refresh">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4v5h5M20 20v-5h-5M4 12a8 8 0 0114.5-4M20 12a8 8 0 01-14.5 4"/></svg>
-                  </button>
-                </div>
-                <div id="ai-models-list" class="ai-models-list"></div>
-              </div>
-              <div class="ai-section ai-keys-section collapsed">
-                <button type="button" class="ai-collapse-header" id="ai-keys-collapse">
-                  <svg class="ai-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-                  <span>API Keys</span>
-                </button>
-                <div class="ai-keys-content" id="ai-keys-content">
-                  <div class="ai-key-block">
-                    <div class="ai-key-header">
-                      <span class="ai-key-title">OpenAI API Key</span>
-                    </div>
-                    <p class="ai-key-desc">Use OpenAI models (GPT-4, etc.) at cost.</p>
-                    <input type="password" id="ai-key-openai" class="ai-key-input" placeholder="Enter your OpenAI API Key">
-                  </div>
-                  <div class="ai-key-block">
-                    <div class="ai-key-header">
-                      <span class="ai-key-title">Anthropic API Key</span>
-                    </div>
-                    <p class="ai-key-desc">Use Claude models at cost.</p>
-                    <input type="password" id="ai-key-anthropic" class="ai-key-input" placeholder="Enter your Anthropic API Key">
-                  </div>
-                  <div class="ai-key-block">
-                    <div class="ai-key-header">
-                      <span class="ai-key-title">Google API Key</span>
-                    </div>
-                    <p class="ai-key-desc">Use Google AI (Gemini) models at cost.</p>
-                    <input type="password" id="ai-key-google" class="ai-key-input" placeholder="Enter your Google AI Studio key">
-                  </div>
-                </div>
-              </div>
-              <div id="ai-add-model-form" class="ai-add-form hidden">
-                <div class="ai-add-form-inner">
-                  <h4 class="ai-add-form-title">Add model</h4>
-                  <select id="ai-add-type" class="theme-select">
-                    <option value="lmstudio">LM Studio</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="claude">Claude</option>
-                    <option value="google">Google AI</option>
+            <div class="settings-main-group collapsed" id="settings-general-group">
+              <button type="button" class="settings-main-toggle" data-target="settings-general-content">
+                <span>General</span>
+                <span class="settings-main-chevron">▾</span>
+              </button>
+              <div class="settings-main-content" id="settings-general-content">
+                <div class="settings-group">
+                  <label>Theme</label>
+                  <select id="theme" class="theme-select">
+                    <option value="system">System</option>
+                    <option value="light">Light</option>
+                    <option value="dark">Dark</option>
                   </select>
-                  <div id="ai-add-lmstudio-wrap" class="ai-add-model-wrap hidden">
-                    <select id="ai-add-lmstudio-model" class="theme-select" disabled>
-                      <option value="">Loading models...</option>
+                </div>
+                <div class="settings-group">
+                  <label>File association</label>
+                  <p class="settings-hint">Set MD Viewer as default app for .md files</p>
+                  <button type="button" class="btn btn-primary" id="set-default-md">Set as default for .md files</button>
+                  <p class="settings-result" id="set-default-result"></p>
+                </div>
+              </div>
+            </div>
+            <div class="settings-main-group collapsed" id="settings-models-group">
+              <button type="button" class="settings-main-toggle" data-target="settings-models-content">
+                <span>Models</span>
+                <span class="settings-main-chevron">▾</span>
+              </button>
+              <div class="settings-main-content" id="settings-models-content">
+                <div class="settings-group ai-settings-group">
+                  <div class="ai-section ai-models-section">
+                    <h3 class="ai-section-title">Model selection</h3>
+                    <div class="ai-search-row">
+                      <input type="text" id="ai-model-search" class="ai-search-input" placeholder="Add or search model" autocomplete="off">
+                      <button type="button" class="ai-refresh-btn ai-add-btn" id="ai-add-model-btn" title="Add model">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                      </button>
+                      <button type="button" class="ai-refresh-btn" id="ai-refresh-models" title="Refresh">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4v5h5M20 20v-5h-5M4 12a8 8 0 0114.5-4M20 12a8 8 0 01-14.5 4"/></svg>
+                      </button>
+                    </div>
+                    <div id="ai-models-list" class="ai-models-list"></div>
+                  </div>
+                </div>
+                <div id="ai-add-model-form" class="ai-add-form hidden">
+                  <div class="ai-add-form-inner">
+                    <h4 class="ai-add-form-title">Add model</h4>
+                    <select id="ai-add-type" class="theme-select">
+                      <option value="lmstudio">LM Studio</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="claude">Claude</option>
+                      <option value="google">Google AI</option>
                     </select>
-                    <p class="ai-add-model-hint" id="ai-add-lmstudio-hint"></p>
-                  </div>
-                  <div id="ai-add-cloud-wrap" class="ai-add-model-wrap hidden">
-                    <select id="ai-add-cloud-model" class="theme-select" disabled>
-                      <option value="">Loading models...</option>
-                    </select>
-                    <p class="ai-add-model-hint" id="ai-add-cloud-hint"></p>
-                  </div>
-                  <div id="ai-add-manual-wrap" class="ai-add-model-wrap">
-                    <input type="text" id="ai-add-model-id" class="theme-select" placeholder="Model ID">
-                  </div>
-                  <div class="ai-form-actions">
-                    <button type="button" class="btn btn-primary" id="ai-add-save">Add</button>
-                    <button type="button" class="btn" id="ai-add-cancel">Cancel</button>
+                    <div id="ai-add-lmstudio-wrap" class="ai-add-model-wrap hidden">
+                      <label class="settings-hint">LM Studio URL</label>
+                      <div class="ai-lmstudio-url-row">
+                        <input type="text" id="ai-add-lmstudio-url" class="theme-select" value="http://localhost:1234" placeholder="http://localhost:1234">
+                        <span class="ai-status-lamp" id="ai-add-lmstudio-lamp" aria-label="LM Studio status" title="Checking LM Studio"></span>
+                        <button type="button" class="btn hidden" id="ai-add-lmstudio-check-custom">Check</button>
+                      </div>
+                      <label class="settings-hint">Model for responses</label>
+                      <select id="ai-add-lmstudio-model" class="theme-select" disabled>
+                        <option value="">Loading models...</option>
+                      </select>
+                      <label class="settings-hint">Model for embeddings</label>
+                      <select id="ai-add-lmstudio-embedding-model" class="theme-select" disabled>
+                        <option value="">Use MiniLM fallback (default)</option>
+                      </select>
+                      <p class="ai-add-model-hint" id="ai-add-lmstudio-hint"></p>
+                    </div>
+                    <div id="ai-add-api-key-wrap" class="ai-add-model-wrap hidden">
+                      <input type="password" id="ai-add-api-key" class="theme-select" placeholder="API Key">
+                      <button type="button" class="btn" id="ai-add-check">Check</button>
+                      <p class="ai-add-model-hint" id="ai-add-check-hint"></p>
+                    </div>
+                    <div id="ai-add-cloud-wrap" class="ai-add-model-wrap hidden">
+                      <select id="ai-add-cloud-model" class="theme-select" disabled>
+                        <option value="">Run check first</option>
+                      </select>
+                      <p class="ai-add-model-hint" id="ai-add-cloud-hint"></p>
+                    </div>
+                    <div id="ai-add-manual-wrap" class="ai-add-model-wrap">
+                      <input type="text" id="ai-add-model-id" class="theme-select" placeholder="Model ID">
+                    </div>
+                    <div class="ai-form-actions">
+                      <button type="button" class="btn btn-primary" id="ai-add-save">Add</button>
+                      <button type="button" class="btn" id="ai-add-cancel">Cancel</button>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-            <div class="settings-group kb-settings-group">
-              <div class="kb-settings-header">
-                <h3 class="ai-section-title">Knowledgebase</h3>
-                <button type="button" class="kb-help-btn" id="kb-help-btn" title="Knowledgebase help">i</button>
-              </div>
-              <p class="settings-hint">Only documents indexed here are used in LLM context.</p>
-              <div class="kb-actions">
-                <button type="button" class="btn" id="kb-import-file-btn">Import file</button>
-                <button type="button" class="btn" id="kb-import-folder-btn">Import folder</button>
-                <button type="button" class="btn kb-clear-btn" id="kb-clear-all-btn">Clear all</button>
-              </div>
-              <div class="kb-import-progress hidden" id="kb-import-progress">
-                <div class="kb-import-progress-header">
-                  <span id="kb-import-progress-title">Importing files...</span>
-                  <span class="kb-spinner" id="kb-import-spinner" aria-hidden="true"></span>
+            <div class="settings-main-group collapsed" id="settings-kb-group">
+              <button type="button" class="settings-main-toggle" data-target="settings-kb-content">
+                <span>Knowledgebase</span>
+                <span class="settings-main-chevron">▾</span>
+              </button>
+              <div class="settings-main-content" id="settings-kb-content">
+                <div class="settings-group kb-settings-group">
+                  <div class="kb-settings-header">
+                    <h3 class="ai-section-title">Knowledgebase</h3>
+                    <button type="button" class="kb-help-btn" id="kb-help-btn" title="Knowledgebase help">i</button>
+                  </div>
+                  <p class="settings-hint">Only documents indexed here are used in LLM context.</p>
+                  <div class="kb-actions">
+                    <button type="button" class="btn" id="kb-import-file-btn">Import file</button>
+                    <button type="button" class="btn" id="kb-import-folder-btn">Import folder</button>
+                    <button type="button" class="btn kb-clear-btn" id="kb-clear-all-btn">Clear all</button>
+                  </div>
+                  <div id="kb-settings-list" class="kb-settings-list"></div>
                 </div>
-                <div class="kb-import-progress-meta" id="kb-import-progress-meta"></div>
-                <div class="kb-import-file-list" id="kb-import-file-list"></div>
               </div>
-              <div id="kb-settings-list" class="kb-settings-list"></div>
             </div>
           </div>
         </div>

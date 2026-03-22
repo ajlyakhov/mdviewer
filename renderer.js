@@ -59,11 +59,6 @@ const kbHelpBtn = document.getElementById('kb-help-btn');
 const kbImportFileBtn = document.getElementById('kb-import-file-btn');
 const kbImportFolderBtn = document.getElementById('kb-import-folder-btn');
 const kbClearAllBtn = document.getElementById('kb-clear-all-btn');
-const kbImportProgress = document.getElementById('kb-import-progress');
-const kbImportProgressTitle = document.getElementById('kb-import-progress-title');
-const kbImportSpinner = document.getElementById('kb-import-spinner');
-const kbImportProgressMeta = document.getElementById('kb-import-progress-meta');
-const kbImportFileList = document.getElementById('kb-import-file-list');
 
 const SETTINGS_TAB = { type: 'settings', name: 'Settings' };
 const CHAT_TAB = { type: 'chat', name: 'Talk to your docs' };
@@ -90,7 +85,7 @@ This guide explains how to configure models so Knowledgebase retrieval works rel
 
 - OpenAI / Claude / Google models can be used for chat generation.
 - Knowledgebase indexing/retrieval still uses local embeddings path.
-- Configure API keys in Settings -> API Keys and add provider models.
+- Add model, enter API key, click Check, then pick available model.
 
 ## 4) Troubleshooting
 
@@ -169,12 +164,31 @@ function openSettings() {
     dropzone.classList.add('hidden');
     viewer.style.display = 'block';
   }
+  collapseAllSettingsGroups();
   themeSelect.value = getTheme();
   setDefaultResult && (setDefaultResult.textContent = '');
   setDefaultResult && (setDefaultResult.className = 'settings-result');
   renderTabs();
   renderActive();
   saveOpenTabs();
+}
+
+function collapseAllSettingsGroups() {
+  document.querySelectorAll('.settings-main-group').forEach((group) => {
+    group.classList.add('collapsed');
+  });
+}
+
+function initSettingsGroups() {
+  document.querySelectorAll('.settings-main-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      if (!targetId) return;
+      const group = btn.closest('.settings-main-group');
+      if (!group) return;
+      group.classList.toggle('collapsed');
+    });
+  });
 }
 
 const setDefaultMdBtn = document.getElementById('set-default-md');
@@ -1122,13 +1136,18 @@ async function restoreOpenTabs() {
 let aiApiKeys = {};
 const aiModelSearch = document.getElementById('ai-model-search');
 const aiModelsList = document.getElementById('ai-models-list');
-const aiKeysCollapse = document.getElementById('ai-keys-collapse');
-const aiKeysSection = document.querySelector('.ai-keys-section');
 const aiAddForm = document.getElementById('ai-add-model-form');
 const aiAddType = document.getElementById('ai-add-type');
 const aiAddModelId = document.getElementById('ai-add-model-id');
 const aiAddSave = document.getElementById('ai-add-save');
 const aiAddCancel = document.getElementById('ai-add-cancel');
+const aiAddApiKey = document.getElementById('ai-add-api-key');
+const aiAddCheck = document.getElementById('ai-add-check');
+const aiAddCheckHint = document.getElementById('ai-add-check-hint');
+const aiAddApiKeyWrap = document.getElementById('ai-add-api-key-wrap');
+const aiAddLmstudioUrl = document.getElementById('ai-add-lmstudio-url');
+const aiAddLmstudioLamp = document.getElementById('ai-add-lmstudio-lamp');
+const aiAddLmstudioCheckCustom = document.getElementById('ai-add-lmstudio-check-custom');
 const typeLabels = { lmstudio: 'LM Studio', openai: 'OpenAI', claude: 'Claude', google: 'Google AI' };
 let lmStudioModelMetaById = {};
 let cloudModelMetaById = {};
@@ -1179,7 +1198,7 @@ function renderAiModelsList() {
     .map(
       (p) =>
         `<div class="ai-model-row" data-id="${escapeHtml(p.id)}">
-          <span class="ai-model-name">${escapeHtml(typeLabels[p.type] || p.type)} / ${escapeHtml(p.modelId || '-')}</span>
+          <span class="ai-model-name">${escapeHtml(typeLabels[p.type] || p.type)} / ${escapeHtml(p.modelId || '-')}${p.type === 'lmstudio' ? ` <span class="kb-item-embed-label">(embeddings: ${escapeHtml(p.embeddingModel || 'MiniLM fallback')})</span>` : ''}</span>
           <div class="ai-model-actions">
             <button type="button" class="ai-model-remove" data-id="${escapeHtml(p.id)}" title="Remove">×</button>
             <div class="ai-toggle ${p.enabled !== false ? 'enabled' : ''}" data-id="${escapeHtml(p.id)}" role="button" tabindex="0"></div>
@@ -1212,38 +1231,11 @@ async function toggleModel(id) {
   updateTalkToDocButton();
 }
 
-function populateApiKeyInputs() {
-  const oa = document.getElementById('ai-key-openai');
-  const an = document.getElementById('ai-key-anthropic');
-  const go = document.getElementById('ai-key-google');
-  if (oa) oa.value = aiApiKeys.openai?.apiKey || aiProviders.find((p) => p.type === 'openai')?.apiKey || '';
-  if (an) an.value = aiApiKeys.anthropic?.apiKey || aiProviders.find((p) => p.type === 'claude')?.apiKey || '';
-  if (go) go.value = aiApiKeys.google?.apiKey || aiProviders.find((p) => p.type === 'google')?.apiKey || '';
-}
-
-async function saveApiKeys() {
-  const oa = document.getElementById('ai-key-openai')?.value?.trim();
-  const an = document.getElementById('ai-key-anthropic')?.value?.trim();
-  const go = document.getElementById('ai-key-google')?.value?.trim();
-  aiApiKeys = {
-    openai: { apiKey: oa || '' },
-    anthropic: { apiKey: an || '' },
-    google: { apiKey: go || '' },
-  };
-  aiProviders.forEach((p) => {
-    if (p.type === 'openai') p.apiKey = oa || p.apiKey;
-    else if (p.type === 'claude') p.apiKey = an || p.apiKey;
-    else if (p.type === 'google') p.apiKey = go || p.apiKey;
-  });
-  await window.mdviewer?.saveAiConfig?.({ aiProviders, aiApiKeys });
-}
-
 async function renderAiSettings() {
   const config = await window.mdviewer?.getAiConfig?.();
   aiProviders = (config?.aiProviders || []).map((p) => ({ ...p, enabled: p.enabled !== false }));
   aiApiKeys = config?.aiApiKeys || {};
   renderAiModelsList();
-  populateApiKeyInputs();
   updateTalkToDocButton();
 }
 
@@ -1251,21 +1243,60 @@ async function renderKnowledgebaseSettingsList() {
   if (!kbSettingsList) return;
   const res = await window.mdviewer?.kbListDocuments?.();
   const docs = res?.documents || [];
-  if (!docs.length) {
+  const transient = kbImportProgressState || { files: [], items: {} };
+  const transientFiles = Array.isArray(transient.files) ? transient.files : [];
+  const transientItems = transient.items || {};
+  const docPaths = new Set(docs.map((d) => String(d.path || '').trim()).filter(Boolean));
+  const placeholderPaths = transientFiles.filter((p) => {
+    const key = String(p || '').trim();
+    return key && !docPaths.has(key);
+  });
+
+  if (!docs.length && !placeholderPaths.length) {
     kbSettingsList.innerHTML = '<div class="kb-settings-empty">No indexed documents yet.</div>';
     return;
   }
-  kbSettingsList.innerHTML = docs
-    .map(
-      (doc) => `<div class="kb-settings-item" data-fp="${escapeHtml(doc.docFingerprint)}">
-        <div class="kb-settings-meta">
-          <div class="kb-settings-summary">${escapeHtml(doc.summary || 'Untitled document')}${doc.stale ? ' <span class="kb-stale-badge">stale</span>' : ''}</div>
-          <div class="kb-settings-path">${escapeHtml(doc.path || doc.docFingerprint)}</div>
-        </div>
+
+  const backendLabel = (doc) => {
+    const key = String(doc?.embeddingBackend || '').toLowerCase();
+    if (key === 'lmstudio') return 'LM Studio';
+    if (key === 'openai') return 'OpenAI';
+    if (key === 'minilm') return 'MiniLM';
+    return doc?.embeddingBackendLabel || 'Unknown';
+  };
+  const embedLabel = (doc) => {
+    if (!doc?.embeddingModel) return '';
+    return `<span class="kb-item-embed-label">(embedded via ${escapeHtml(backendLabel(doc))} / ${escapeHtml(doc.embeddingModel)})</span>`;
+  };
+  const statusForPath = (p) => transientItems[String(p || '').trim()] || '';
+  const statusBadge = (status) =>
+    status ? `<span class="kb-import-file-status ${escapeHtml(status)}">${escapeHtml(statusLabel(status))}</span>` : '';
+  const docRows = docs.map((doc) => {
+    const rowStatus = statusForPath(doc.path);
+    return `<div class="kb-settings-item" data-fp="${escapeHtml(doc.docFingerprint)}">
+      <div class="kb-settings-meta">
+        <div class="kb-settings-summary">${escapeHtml(doc.summary || 'Untitled document')}${doc.stale ? ' <span class="kb-stale-badge">stale</span>' : ''} ${embedLabel(doc)}</div>
+        <div class="kb-settings-path">${escapeHtml(doc.path || doc.docFingerprint)}</div>
+      </div>
+      <div class="kb-settings-item-actions">
+        ${statusBadge(rowStatus)}
         <button type="button" class="kb-settings-delete" data-fp="${escapeHtml(doc.docFingerprint)}">Delete</button>
-      </div>`
-    )
-    .join('');
+      </div>
+    </div>`;
+  });
+  const placeholderRows = placeholderPaths.map((p) => {
+    const status = statusForPath(p) || 'pending';
+    return `<div class="kb-settings-item kb-settings-item-placeholder">
+      <div class="kb-settings-meta">
+        <div class="kb-settings-summary">${escapeHtml(fileNameFromPath(p))}</div>
+        <div class="kb-settings-path">${escapeHtml(p)}</div>
+      </div>
+      <div class="kb-settings-item-actions">
+        ${statusBadge(status)}
+      </div>
+    </div>`;
+  });
+  kbSettingsList.innerHTML = [...placeholderRows, ...docRows].join('');
   kbSettingsList.querySelectorAll('.kb-settings-delete').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
@@ -1305,44 +1336,6 @@ function statusLabel(status) {
   return 'Pending';
 }
 
-function renderKbImportProgress() {
-  if (!kbImportProgress || !kbImportProgressMeta || !kbImportFileList || !kbImportProgressTitle || !kbImportSpinner) return;
-  const state = kbImportProgressState;
-  if (!state || !state.files?.length) {
-    kbImportProgress.classList.add('hidden');
-    return;
-  }
-  kbImportProgress.classList.remove('hidden');
-  const items = state.items || {};
-  const total = state.files.length;
-  let done = 0;
-  let failed = 0;
-  let imported = 0;
-  let skipped = 0;
-  state.files.forEach((p) => {
-    const st = items[p] || 'pending';
-    if (st !== 'pending' && st !== 'processing') done += 1;
-    if (st === 'failed') failed += 1;
-    if (st === 'imported') imported += 1;
-    if (st === 'skipped') skipped += 1;
-  });
-  const active = !state.done;
-  kbImportProgressTitle.textContent = active ? 'Importing files...' : 'Import completed';
-  kbImportSpinner.classList.toggle('hidden', !active);
-  kbImportProgressMeta.textContent = active
-    ? `Processed ${done}/${total}`
-    : `Imported: ${imported}, skipped: ${skipped}, failed: ${failed}`;
-  kbImportFileList.innerHTML = state.files
-    .map((p) => {
-      const st = items[p] || 'pending';
-      return `<div class="kb-import-file-row">
-        <span class="kb-import-file-name" title="${escapeHtml(p)}">${escapeHtml(fileNameFromPath(p))}</span>
-        <span class="kb-import-file-status ${escapeHtml(st)}">${escapeHtml(statusLabel(st))}</span>
-      </div>`;
-    })
-    .join('');
-}
-
 function handleKbImportProgress(payload = {}) {
   const stage = payload.stage;
   if (stage === 'start') {
@@ -1351,18 +1344,18 @@ function handleKbImportProgress(payload = {}) {
       items: Object.fromEntries((payload.files || []).map((p) => [p, 'pending'])),
       done: false,
     };
-    renderKbImportProgress();
+    renderKnowledgebaseSettingsList();
     return;
   }
   if (!kbImportProgressState) return;
   if (stage === 'item' && payload.path) {
     kbImportProgressState.items[payload.path] = payload.status || 'processing';
-    renderKbImportProgress();
+    renderKnowledgebaseSettingsList();
     return;
   }
   if (stage === 'done') {
     kbImportProgressState.done = true;
-    renderKbImportProgress();
+    renderKnowledgebaseSettingsList();
   }
 }
 
@@ -1371,12 +1364,13 @@ async function importKnowledgebaseFile() {
   kbImportFileBtn.disabled = true;
   try {
     kbImportProgressState = null;
-    renderKbImportProgress();
     const res = await window.mdviewer?.kbImportFileDialog?.();
     if (!res?.ok) throw new Error(res?.error || 'Import failed');
-    if (!res?.cancelled) alert(summarizeKbImportResult(res));
     await renderKnowledgebaseSettingsList();
     await refreshActiveDocumentKbState();
+    kbImportProgressState = null;
+    await renderKnowledgebaseSettingsList();
+    if (!res?.cancelled) alert(summarizeKbImportResult(res));
   } catch (err) {
     alert(err?.message || 'Import failed');
   } finally {
@@ -1389,12 +1383,13 @@ async function importKnowledgebaseFolder() {
   kbImportFolderBtn.disabled = true;
   try {
     kbImportProgressState = null;
-    renderKbImportProgress();
     const res = await window.mdviewer?.kbImportFolderDialog?.();
     if (!res?.ok) throw new Error(res?.error || 'Import failed');
-    if (!res?.cancelled) alert(summarizeKbImportResult(res));
     await renderKnowledgebaseSettingsList();
     await refreshActiveDocumentKbState();
+    kbImportProgressState = null;
+    await renderKnowledgebaseSettingsList();
+    if (!res?.cancelled) alert(summarizeKbImportResult(res));
   } catch (err) {
     alert(err?.message || 'Import failed');
   } finally {
@@ -1425,43 +1420,117 @@ function initAiSettings() {
   document.getElementById('ai-refresh-models')?.addEventListener('click', () => {
     renderAiSettings();
   });
-  aiKeysCollapse?.addEventListener('click', () => {
-    aiKeysSection?.classList.toggle('collapsed');
-  });
-  ['ai-key-openai', 'ai-key-anthropic', 'ai-key-google'].forEach((id) => {
-    document.getElementById(id)?.addEventListener('blur', saveApiKeys);
-    document.getElementById(id)?.addEventListener('change', saveApiKeys);
-  });
+
   const addPlaceholders = { openai: 'e.g. gpt-4o', claude: 'e.g. claude-3-5-sonnet', google: 'e.g. gemini-1.5-flash' };
   const lmstudioWrap = document.getElementById('ai-add-lmstudio-wrap');
   const cloudWrap = document.getElementById('ai-add-cloud-wrap');
   const manualWrap = document.getElementById('ai-add-manual-wrap');
   const lmstudioSelect = document.getElementById('ai-add-lmstudio-model');
+  const lmstudioEmbeddingSelect = document.getElementById('ai-add-lmstudio-embedding-model');
   const lmstudioHint = document.getElementById('ai-add-lmstudio-hint');
   const cloudSelect = document.getElementById('ai-add-cloud-model');
   const cloudHint = document.getElementById('ai-add-cloud-hint');
+  const DEFAULT_LMSTUDIO_URL = 'http://localhost:1234';
+  let lmStudioAutocheckTimer = null;
+  const cloudKeyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
+  const wizardState = {
+    checkedProvider: '',
+    checkedModelType: '',
+    verifiedApiKey: '',
+    lmstudioChecked: false,
+  };
 
-  async function fetchLmStudioModels() {
-    const baseUrl = aiApiKeys.lmstudio?.baseUrl || aiProviders.find((p) => p.type === 'lmstudio')?.baseUrl || 'http://127.0.0.1:1234';
+  function resetWizardChecks() {
+    wizardState.checkedProvider = '';
+    wizardState.checkedModelType = '';
+    wizardState.verifiedApiKey = '';
+    wizardState.lmstudioChecked = false;
+    if (aiAddCheckHint) aiAddCheckHint.textContent = '';
+    if (cloudHint) cloudHint.textContent = '';
+    if (lmstudioHint) lmstudioHint.textContent = '';
+  }
+
+  function normalizeLmStudioUrl(url) {
+    const raw = String(url || '').trim();
+    return raw || DEFAULT_LMSTUDIO_URL;
+  }
+
+  function setLmStudioLamp(state, title = '') {
+    if (!aiAddLmstudioLamp) return;
+    aiAddLmstudioLamp.classList.remove('ok', 'fail', 'checking');
+    if (state) aiAddLmstudioLamp.classList.add(state);
+    aiAddLmstudioLamp.title = title || 'LM Studio status';
+  }
+
+  function syncLmStudioCustomCheckButtonVisibility() {
+    if (!aiAddLmstudioCheckCustom) return;
+    const current = normalizeLmStudioUrl(aiAddLmstudioUrl?.value);
+    aiAddLmstudioCheckCustom.classList.toggle('hidden', current === DEFAULT_LMSTUDIO_URL);
+  }
+
+  function updateSaveButtonState() {
+    const type = aiAddType?.value;
+    let enabled = false;
+    if (type === 'lmstudio') {
+      enabled = Boolean(wizardState.lmstudioChecked && lmstudioSelect?.value);
+    } else if (['openai', 'claude', 'google'].includes(type)) {
+      const checked = wizardState.checkedProvider === type && wizardState.checkedModelType === 'cloud';
+      enabled = Boolean(checked && cloudSelect?.value);
+    } else {
+      enabled = Boolean(aiAddModelId?.value?.trim());
+    }
+    if (aiAddSave) aiAddSave.disabled = !enabled;
+  }
+
+  async function checkLmStudioAvailability(baseUrlOverride) {
+    const baseUrl = normalizeLmStudioUrl(
+      baseUrlOverride ||
+      aiAddLmstudioUrl?.value ||
+      aiApiKeys.lmstudio?.baseUrl ||
+      aiProviders.find((p) => p.type === 'lmstudio')?.baseUrl ||
+      DEFAULT_LMSTUDIO_URL
+    );
+    if (aiAddLmstudioUrl) aiAddLmstudioUrl.value = baseUrl;
+    syncLmStudioCustomCheckButtonVisibility();
+    setLmStudioLamp('checking', `Checking ${baseUrl}`);
     if (lmstudioSelect) {
       lmstudioSelect.disabled = true;
       lmstudioSelect.innerHTML = '<option value="">Loading models...</option>';
       if (lmstudioHint) lmstudioHint.textContent = '';
     }
-    const { models, error } = await window.mdviewer?.fetchLmStudioModels?.(baseUrl) || {};
+    if (lmstudioEmbeddingSelect) {
+      lmstudioEmbeddingSelect.disabled = true;
+      lmstudioEmbeddingSelect.innerHTML = '<option value="">Use MiniLM fallback (default)</option>';
+    }
+    wizardState.lmstudioChecked = false;
+    updateSaveButtonState();
+    const availability = await window.mdviewer?.checkLmStudioAvailability?.(baseUrl);
+    const models = availability?.llmModels || [];
+    const embeddingModels = availability?.embeddingModels || [];
+    const error = availability?.error;
     if (lmstudioSelect) {
       lmstudioSelect.disabled = false;
       if (error) {
         lmStudioModelMetaById = {};
-        lmstudioSelect.innerHTML = '<option value="">Failed to load – enter manually below</option>';
+        lmstudioSelect.innerHTML = '<option value="">Failed to load models</option>';
+        if (lmstudioEmbeddingSelect) {
+          lmstudioEmbeddingSelect.disabled = false;
+          lmstudioEmbeddingSelect.innerHTML = '<option value="">Use MiniLM fallback (default)</option>';
+        }
         if (lmstudioHint) lmstudioHint.textContent = error;
-        manualWrap?.classList.remove('hidden');
+        setLmStudioLamp('fail', `LM Studio unreachable at ${baseUrl}`);
+        updateSaveButtonState();
         return;
       }
       if (!models?.length) {
         lmStudioModelMetaById = {};
-        lmstudioSelect.innerHTML = '<option value="">No models found – check LM Studio server</option>';
-        if (lmstudioHint) lmstudioHint.textContent = 'Ensure LM Studio server is running and a model is loaded.';
+        lmstudioSelect.innerHTML = '<option value="">No chat models found</option>';
+        if (lmstudioHint) {
+          const rec = (availability?.recommendedChatModels || []).join(', ');
+          lmstudioHint.textContent = `LM Studio connected, but no chat model loaded. Recommended: ${rec}.`;
+        }
+        setLmStudioLamp('ok', `LM Studio reachable at ${baseUrl}`);
+        updateSaveButtonState();
         return;
       }
       lmStudioModelMetaById = Object.fromEntries(
@@ -1476,27 +1545,50 @@ function initAiSettings() {
           return `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}${escapeHtml(ctx)}${escapeHtml(runtime)}</option>`;
         })
         .join('');
-      if (lmstudioHint) {
-        const downgraded = models.filter((m) => {
-          const loaded = toInt(m.loadedContextLength);
-          const max = toInt(m.maxContextLength);
-          return loaded && max && loaded < max;
-        }).length;
-        lmstudioHint.textContent = downgraded
-          ? `${models.length} model(s) from LM Studio. ${downgraded} loaded with smaller runtime context.`
-          : `${models.length} model(s) from LM Studio`;
+      if (lmstudioEmbeddingSelect) {
+        lmstudioEmbeddingSelect.disabled = false;
+        const embedOptions = embeddingModels
+          .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name || m.id)}</option>`)
+          .join('');
+        lmstudioEmbeddingSelect.innerHTML = `<option value="">Use MiniLM fallback (default)</option>${embedOptions}`;
+        if (embeddingModels.length > 0) {
+          lmstudioEmbeddingSelect.value = String(embeddingModels[0]?.id || '');
+        } else {
+          lmstudioEmbeddingSelect.value = '';
+        }
       }
+      if (lmstudioHint) {
+        const embedText = embeddingModels.length
+          ? `Embedding models: ${embeddingModels.length}.`
+          : `Missing embedding model. Load one (recommended: ${(availability?.recommendedEmbeddingModels || []).join(', ')}).`;
+        lmstudioHint.textContent = `Chat models: ${models.length}. ${embedText}`;
+      }
+      setLmStudioLamp('ok', `LM Studio reachable at ${baseUrl}`);
+      wizardState.lmstudioChecked = true;
+      updateSaveButtonState();
     }
   }
 
-  async function fetchCloudModels(type) {
-    const keyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
-    const keyId = keyMap[type];
-    const apiKey = aiApiKeys[keyId]?.apiKey || document.getElementById(`ai-key-${keyId}`)?.value?.trim() || '';
+  async function checkCloudModels(type) {
+    const apiKey = aiAddApiKey?.value?.trim() || '';
+    wizardState.checkedProvider = '';
+    wizardState.checkedModelType = '';
+    wizardState.verifiedApiKey = '';
     if (cloudSelect) {
       cloudSelect.disabled = true;
       cloudSelect.innerHTML = '<option value="">Loading models...</option>';
       if (cloudHint) cloudHint.textContent = '';
+    }
+    updateSaveButtonState();
+    if (aiAddCheckHint) aiAddCheckHint.textContent = '';
+    if (!apiKey) {
+      if (cloudSelect) {
+        cloudSelect.disabled = true;
+        cloudSelect.innerHTML = '<option value="">Run check first</option>';
+      }
+      if (aiAddCheckHint) aiAddCheckHint.textContent = 'API key is required.';
+      updateSaveButtonState();
+      return;
     }
     const fetchFn = {
       openai: window.mdviewer?.fetchOpenAIModels,
@@ -1506,23 +1598,20 @@ function initAiSettings() {
     const { models, error } = (await fetchFn?.(apiKey)) || {};
     if (cloudSelect) {
       cloudSelect.disabled = false;
-      if (!apiKey) {
-        cloudModelMetaById = {};
-        cloudSelect.innerHTML = '<option value="">Enter API key in API Keys section first</option>';
-        if (cloudHint) cloudHint.textContent = 'Expand API Keys and add your key.';
-        return;
-      }
       if (error) {
         cloudModelMetaById = {};
-        cloudSelect.innerHTML = '<option value="">Failed to load – enter manually below</option>';
+        cloudSelect.innerHTML = '<option value="">Check failed</option>';
         if (cloudHint) cloudHint.textContent = error;
-        manualWrap?.classList.remove('hidden');
+        if (aiAddCheckHint) aiAddCheckHint.textContent = 'Check failed. Fix key and retry.';
+        updateSaveButtonState();
         return;
       }
       if (!models?.length) {
         cloudModelMetaById = {};
         cloudSelect.innerHTML = '<option value="">No models found</option>';
         if (cloudHint) cloudHint.textContent = error || 'Check your API key.';
+        if (aiAddCheckHint) aiAddCheckHint.textContent = 'API key accepted, but no usable models were returned.';
+        updateSaveButtonState();
         return;
       }
       cloudModelMetaById = Object.fromEntries(models.map((m) => [m.id, m]));
@@ -1533,6 +1622,11 @@ function initAiSettings() {
         })
         .join('');
       if (cloudHint) cloudHint.textContent = `${models.length} model(s) available`;
+      wizardState.checkedProvider = type;
+      wizardState.checkedModelType = 'cloud';
+      wizardState.verifiedApiKey = apiKey;
+      if (aiAddCheckHint) aiAddCheckHint.textContent = 'Check passed. Select a model.';
+      updateSaveButtonState();
     }
   }
 
@@ -1541,10 +1635,39 @@ function initAiSettings() {
     const isCloud = ['openai', 'claude', 'google'].includes(type);
     lmstudioWrap?.classList.toggle('hidden', !isLm);
     cloudWrap?.classList.toggle('hidden', !isCloud);
+    aiAddApiKeyWrap?.classList.toggle('hidden', !isCloud);
     manualWrap?.classList.toggle('hidden', isLm || isCloud);
     if (aiAddModelId) aiAddModelId.placeholder = addPlaceholders[type] || 'Model ID';
-    if (isLm) fetchLmStudioModels();
-    else if (isCloud) fetchCloudModels(type);
+    resetWizardChecks();
+    if (cloudSelect && isCloud) {
+      cloudSelect.disabled = true;
+      cloudSelect.innerHTML = '<option value="">Run check first</option>';
+    }
+    if (lmstudioSelect && isLm) {
+      lmstudioSelect.disabled = true;
+      lmstudioSelect.innerHTML = '<option value="">Run check first</option>';
+    }
+    if (lmstudioEmbeddingSelect && isLm) {
+      lmstudioEmbeddingSelect.disabled = true;
+      lmstudioEmbeddingSelect.innerHTML = '<option value="">Use MiniLM fallback (default)</option>';
+    }
+    if (isLm && aiAddLmstudioUrl) {
+      aiAddLmstudioUrl.value = normalizeLmStudioUrl(
+        aiApiKeys.lmstudio?.baseUrl ||
+        aiProviders.find((p) => p.type === 'lmstudio')?.baseUrl ||
+        DEFAULT_LMSTUDIO_URL
+      );
+      syncLmStudioCustomCheckButtonVisibility();
+      setLmStudioLamp('', 'LM Studio status');
+      if (normalizeLmStudioUrl(aiAddLmstudioUrl.value) === DEFAULT_LMSTUDIO_URL) {
+        checkLmStudioAvailability(aiAddLmstudioUrl.value);
+      }
+    }
+    if (aiAddApiKey) {
+      const keySlot = cloudKeyMap[type];
+      aiAddApiKey.value = keySlot ? (aiApiKeys[keySlot]?.apiKey || '') : '';
+    }
+    updateSaveButtonState();
   }
 
   function openAddForm() {
@@ -1552,12 +1675,45 @@ function initAiSettings() {
     aiAddType.value = 'lmstudio';
     aiAddModelId.value = '';
     switchAddModelUI('lmstudio');
+    updateSaveButtonState();
   }
   aiAddType?.addEventListener('change', () => switchAddModelUI(aiAddType.value));
+  aiAddModelId?.addEventListener('input', updateSaveButtonState);
+  cloudSelect?.addEventListener('change', updateSaveButtonState);
+  lmstudioSelect?.addEventListener('change', updateSaveButtonState);
+  lmstudioEmbeddingSelect?.addEventListener('change', updateSaveButtonState);
+  aiAddLmstudioUrl?.addEventListener('input', () => {
+    syncLmStudioCustomCheckButtonVisibility();
+    setLmStudioLamp('', 'LM Studio status');
+    if (lmStudioAutocheckTimer) clearTimeout(lmStudioAutocheckTimer);
+    const current = normalizeLmStudioUrl(aiAddLmstudioUrl.value);
+    if (current === DEFAULT_LMSTUDIO_URL) {
+      lmStudioAutocheckTimer = setTimeout(() => checkLmStudioAvailability(current), 350);
+    }
+  });
+  aiAddLmstudioCheckCustom?.addEventListener('click', () => {
+    checkLmStudioAvailability(aiAddLmstudioUrl?.value);
+  });
+  aiAddApiKey?.addEventListener('input', () => {
+    wizardState.checkedProvider = '';
+    wizardState.checkedModelType = '';
+    wizardState.verifiedApiKey = '';
+    if (aiAddCheckHint) aiAddCheckHint.textContent = '';
+    if (cloudSelect) {
+      cloudSelect.disabled = true;
+      cloudSelect.innerHTML = '<option value="">Run check first</option>';
+    }
+    updateSaveButtonState();
+  });
+  aiAddCheck?.addEventListener('click', () => {
+    const type = aiAddType?.value;
+    if (['openai', 'claude', 'google'].includes(type)) checkCloudModels(type);
+  });
 
   function closeAddForm() {
     aiAddForm?.classList.add('hidden');
     aiModelSearch.value = '';
+    resetWizardChecks();
     renderAiModelsList();
   }
   aiAddSave?.addEventListener('click', async () => {
@@ -1567,6 +1723,11 @@ function initAiSettings() {
     else if (['openai', 'claude', 'google'].includes(type)) modelId = (cloudSelect?.value || '').trim();
     if (!modelId) modelId = aiAddModelId?.value?.trim() || '';
     if (!modelId) return;
+    if (type === 'lmstudio' && !wizardState.lmstudioChecked) return;
+    if (['openai', 'claude', 'google'].includes(type)) {
+      const checked = wizardState.checkedProvider === type && wizardState.checkedModelType === 'cloud';
+      if (!checked || !wizardState.verifiedApiKey) return;
+    }
     const keys = aiApiKeys;
     const selectedMeta =
       type === 'lmstudio'
@@ -1591,11 +1752,24 @@ function initAiSettings() {
       effectiveContextLength,
       maxOutputTokens: null,
       maxOutputTokensUserSet: false,
-      baseUrl: type === 'lmstudio' ? (keys.lmstudio?.baseUrl || aiProviders.find((p) => p.type === 'lmstudio')?.baseUrl || 'http://127.0.0.1:1234') : undefined,
-      apiKey: type === 'openai' ? (keys.openai?.apiKey || '') : type === 'claude' ? (keys.anthropic?.apiKey || '') : type === 'google' ? (keys.google?.apiKey || '') : '',
+      baseUrl: type === 'lmstudio' ? normalizeLmStudioUrl(aiAddLmstudioUrl?.value || keys.lmstudio?.baseUrl || DEFAULT_LMSTUDIO_URL) : undefined,
+      embeddingModel: type === 'lmstudio' ? ((lmstudioEmbeddingSelect?.value || '').trim()) : undefined,
+      apiKey:
+        type === 'openai' || type === 'claude' || type === 'google'
+          ? wizardState.verifiedApiKey
+          : '',
     };
+    if (type === 'openai') aiApiKeys.openai = { apiKey: wizardState.verifiedApiKey };
+    if (type === 'claude') aiApiKeys.anthropic = { apiKey: wizardState.verifiedApiKey };
+    if (type === 'google') aiApiKeys.google = { apiKey: wizardState.verifiedApiKey };
+    if (type === 'lmstudio') {
+      aiApiKeys.lmstudio = {
+        ...(aiApiKeys.lmstudio || {}),
+        baseUrl: provider.baseUrl || DEFAULT_LMSTUDIO_URL,
+      };
+    }
     aiProviders.push(provider);
-    await window.mdviewer?.saveAiConfig?.({ aiProviders });
+    await window.mdviewer?.saveAiConfig?.({ aiProviders, aiApiKeys });
     closeAddForm();
     renderAiModelsList();
     updateTalkToDocButton();
@@ -2370,6 +2544,7 @@ function initChatTab() {
 
 // Init
 initTheme();
+initSettingsGroups();
 initAiSettings();
 initChatTab();
 window.mdviewer?.onKbImportProgress?.(handleKbImportProgress);

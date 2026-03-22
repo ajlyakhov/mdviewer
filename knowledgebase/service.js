@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { embedWithMiniLM } = require('./minilm-embedder');
 
 const KB_FILE = 'knowledgebase.json';
 const DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text-v1.5';
@@ -40,6 +41,29 @@ function anchorPreview(text, maxLen = 180) {
     .trim();
   if (!clean) return '';
   return clean.length > maxLen ? clean.slice(0, maxLen) : clean;
+}
+
+function embeddingDescriptor(provider) {
+  const p = provider || {};
+  if (p.type === 'openai') {
+    return {
+      embeddingBackend: 'openai',
+      embeddingBackendLabel: 'OpenAI',
+      embeddingModel: p.model || 'text-embedding-3-small',
+    };
+  }
+  if (p.type === 'lmstudio') {
+    return {
+      embeddingBackend: 'lmstudio',
+      embeddingBackendLabel: 'LM Studio',
+      embeddingModel: p.model || DEFAULT_EMBEDDING_MODEL,
+    };
+  }
+  return {
+    embeddingBackend: 'minilm',
+    embeddingBackendLabel: 'MiniLM',
+    embeddingModel: 'all-MiniLM-L6-v2',
+  };
 }
 
 function toArray(value) {
@@ -327,13 +351,14 @@ class KnowledgebaseService {
       });
   }
 
-  async addDocument({ path: docPath, content, baseUrl, model, replacePathVersions = false }) {
+  async addDocument({ path: docPath, content, embeddingProvider, replacePathVersions = false }) {
     const normalized = normalizeContent(content);
     if (!normalized) {
       throw new Error('Cannot add empty document to knowledgebase.');
     }
     const db = await this.load();
     const now = Date.now();
+    const embedInfo = embeddingDescriptor(embeddingProvider);
     const docFingerprint = createFingerprint(normalized);
     const existing = db.documents.find((d) => d.docFingerprint === docFingerprint);
     if (existing) {
@@ -348,7 +373,15 @@ class KnowledgebaseService {
       }
       nextDb.documents = nextDb.documents.map((d) =>
         d.docFingerprint === docFingerprint
-          ? { ...d, path: docPath || d.path, updatedAt: now }
+          ? {
+              ...d,
+              path: docPath || d.path,
+              updatedAt: now,
+              embeddedAt: now,
+              embeddingBackend: embedInfo.embeddingBackend,
+              embeddingBackendLabel: embedInfo.embeddingBackendLabel,
+              embeddingModel: embedInfo.embeddingModel,
+            }
           : d
       );
       await this.save(nextDb);
@@ -361,9 +394,8 @@ class KnowledgebaseService {
     }
 
     const vectors = await this.embedTexts({
-      baseUrl,
-      model: model || DEFAULT_EMBEDDING_MODEL,
       inputs: chunks.map((c) => c.content),
+      provider: embeddingProvider,
     });
     if (!vectors.length || vectors.length !== chunks.length) {
       throw new Error('Embedding model returned unexpected vector count.');
@@ -376,6 +408,10 @@ class KnowledgebaseService {
       createdAt: now,
       updatedAt: now,
       chunkCount: chunks.length,
+      embeddedAt: now,
+      embeddingBackend: embedInfo.embeddingBackend,
+      embeddingBackendLabel: embedInfo.embeddingBackendLabel,
+      embeddingModel: embedInfo.embeddingModel,
     };
     const chunkRows = chunks.map((chunk, idx) => {
       const chunkId = `${docFingerprint}:${idx}`;
@@ -458,9 +494,12 @@ class KnowledgebaseService {
     if (!db.chunkEmbeddings.length) return [];
 
     const [queryVector] = await this.embedTexts({
-      baseUrl,
-      model: model || DEFAULT_EMBEDDING_MODEL,
       inputs: [cleanQuery],
+      provider: {
+        type: 'lmstudio',
+        baseUrl,
+        model: model || DEFAULT_EMBEDDING_MODEL,
+      },
     });
     if (!queryVector) return [];
 
@@ -497,7 +536,7 @@ class KnowledgebaseService {
   }
 
   async buildContextDocuments(args) {
-    const rows = await this.searchSimilarChunks(args);
+    const rows = await this.searchSimilarChunksWithProvider(args);
     const contextDocuments = rows.map((row, idx) => ({
       path: row.path || row.docFingerprint,
       content: [
@@ -521,29 +560,115 @@ class KnowledgebaseService {
     return { contextDocuments, references };
   }
 
-  async embedTexts({ baseUrl, model, inputs }) {
+  async searchSimilarChunksWithProvider({ query, provider, topK = 12, maxPerDocument = 3 }) {
+    const cleanQuery = String(query || '').trim();
+    if (!cleanQuery) return [];
+    const db = await this.load();
+    if (!db.chunkEmbeddings.length) return [];
+    const [queryVector] = await this.embedTexts({
+      inputs: [cleanQuery],
+      provider,
+    });
+    if (!queryVector) return [];
+    const chunkById = new Map(db.chunks.map((c) => [c.chunkId, c]));
+    const scored = db.chunkEmbeddings
+      .map((row) => {
+        const chunk = chunkById.get(row.chunkId);
+        if (!chunk) return null;
+        const score = cosineSimilarity(queryVector, row.embedding);
+        return { score, chunk };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+
+    const perDocCounter = new Map();
+    const selected = [];
+    for (const row of scored) {
+      if (selected.length >= Math.max(1, topK)) break;
+      const fp = row.chunk.docFingerprint;
+      const used = perDocCounter.get(fp) || 0;
+      if (used >= Math.max(1, maxPerDocument)) continue;
+      perDocCounter.set(fp, used + 1);
+      selected.push(row);
+    }
+
+    return selected.map(({ score, chunk }) => ({
+      score,
+      docFingerprint: chunk.docFingerprint,
+      path: chunk.path,
+      headingPath: chunk.headingPath,
+      chunkIndex: chunk.chunkIndex,
+      content: chunk.content,
+    }));
+  }
+
+  async embedTexts({ inputs, provider }) {
     const cleanInputs = toArray(inputs).map((s) => String(s || '').trim()).filter(Boolean);
     if (!cleanInputs.length) return [];
-    const root = String(baseUrl || 'http://127.0.0.1:1234')
+    const effectiveProvider = provider || { type: 'minilm' };
+    if (effectiveProvider.type === 'minilm') {
+      return embedWithMiniLM(cleanInputs);
+    }
+    if (effectiveProvider.type === 'openai') {
+      try {
+        const data = await httpJson(
+          'https://api.openai.com/v1/embeddings',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${effectiveProvider.apiKey}`,
+            },
+          },
+          {
+            model: effectiveProvider.model || 'text-embedding-3-small',
+            input: cleanInputs,
+          }
+        );
+        const list = toArray(data?.data)
+          .sort((a, b) => (a.index || 0) - (b.index || 0))
+          .map((row) => row.embedding)
+          .filter((vec) => Array.isArray(vec) && vec.length > 0);
+        if (list.length !== cleanInputs.length) {
+          throw new Error('OpenAI embedding count mismatch.');
+        }
+        return list;
+      } catch (err) {
+        if (effectiveProvider.allowMiniLmFallback) {
+          return embedWithMiniLM(cleanInputs);
+        }
+        throw err;
+      }
+    }
+    if (effectiveProvider.type !== 'lmstudio') {
+      return embedWithMiniLM(cleanInputs);
+    }
+    const root = String(effectiveProvider.baseUrl || 'http://127.0.0.1:1234')
       .replace(/\/$/, '')
       .replace(/localhost/gi, '127.0.0.1');
     const url = root.endsWith('/v1') ? `${root}/embeddings` : `${root}/v1/embeddings`;
-    const data = await httpJson(
-      url,
-      { method: 'POST' },
-      {
-        model: model || DEFAULT_EMBEDDING_MODEL,
-        input: cleanInputs,
+    try {
+      const data = await httpJson(
+        url,
+        { method: 'POST' },
+        {
+          model: effectiveProvider.model || DEFAULT_EMBEDDING_MODEL,
+          input: cleanInputs,
+        }
+      );
+      const list = toArray(data?.data)
+        .sort((a, b) => (a.index || 0) - (b.index || 0))
+        .map((row) => row.embedding)
+        .filter((vec) => Array.isArray(vec) && vec.length > 0);
+      if (list.length !== cleanInputs.length) {
+        throw new Error('Embedding count mismatch from LM Studio.');
       }
-    );
-    const list = toArray(data?.data)
-      .sort((a, b) => (a.index || 0) - (b.index || 0))
-      .map((row) => row.embedding)
-      .filter((vec) => Array.isArray(vec) && vec.length > 0);
-    if (list.length !== cleanInputs.length) {
-      throw new Error('Embedding count mismatch from LM Studio.');
+      return list;
+    } catch (err) {
+      if (effectiveProvider.allowMiniLmFallback) {
+        return embedWithMiniLM(cleanInputs);
+      }
+      throw err;
     }
-    return list;
   }
 }
 

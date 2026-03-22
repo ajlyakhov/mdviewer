@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('mdviewer', {
   getOpenTabs: () => ipcRenderer.invoke('get-open-tabs'),
   saveOpenTabs: (state) => ipcRenderer.invoke('save-open-tabs', state),
   fetchLmStudioModels: (baseUrl) => ipcRenderer.invoke('fetch-lmstudio-models', baseUrl),
+  checkLmStudioAvailability: (baseUrl) => ipcRenderer.invoke('check-lmstudio-availability', baseUrl),
   fetchOpenAIModels: (apiKey) => ipcRenderer.invoke('fetch-openai-models', apiKey),
   fetchAnthropicModels: (apiKey) => ipcRenderer.invoke('fetch-anthropic-models', apiKey),
   fetchGoogleModels: (apiKey) => ipcRenderer.invoke('fetch-google-models', apiKey),
