@@ -42,6 +42,13 @@
       </div>
       <div class="viewer-container" id="viewer" style="display:none">
         <div class="viewer-markdown" id="viewer-markdown">
+          <div class="kb-doc-control hidden" id="kb-doc-control">
+            <button type="button" class="kb-add-btn" id="kb-add-btn">Add to knowledgebase</button>
+            <div class="kb-inside-badge hidden" id="kb-inside-badge">
+              <span>Inside knowledgebase</span>
+              <button type="button" class="kb-remove-btn" id="kb-remove-btn" title="Remove from knowledgebase">×</button>
+            </div>
+          </div>
           <div class="markdown-body" id="markdown"></div>
         </div>
         <div class="viewer-settings hidden" id="viewer-settings">
@@ -134,6 +141,27 @@
                   </div>
                 </div>
               </div>
+            </div>
+            <div class="settings-group kb-settings-group">
+              <div class="kb-settings-header">
+                <h3 class="ai-section-title">Knowledgebase</h3>
+                <button type="button" class="kb-help-btn" id="kb-help-btn" title="Knowledgebase help">i</button>
+              </div>
+              <p class="settings-hint">Only documents indexed here are used in LLM context.</p>
+              <div class="kb-actions">
+                <button type="button" class="btn" id="kb-import-file-btn">Import file</button>
+                <button type="button" class="btn" id="kb-import-folder-btn">Import folder</button>
+                <button type="button" class="btn kb-clear-btn" id="kb-clear-all-btn">Clear all</button>
+              </div>
+              <div class="kb-import-progress hidden" id="kb-import-progress">
+                <div class="kb-import-progress-header">
+                  <span id="kb-import-progress-title">Importing files...</span>
+                  <span class="kb-spinner" id="kb-import-spinner" aria-hidden="true"></span>
+                </div>
+                <div class="kb-import-progress-meta" id="kb-import-progress-meta"></div>
+                <div class="kb-import-file-list" id="kb-import-file-list"></div>
+              </div>
+              <div id="kb-settings-list" class="kb-settings-list"></div>
             </div>
           </div>
         </div>

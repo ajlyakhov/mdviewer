@@ -35,6 +35,15 @@ contextBridge.exposeInMainWorld('mdviewer', {
   fetchOpenAIModels: (apiKey) => ipcRenderer.invoke('fetch-openai-models', apiKey),
   fetchAnthropicModels: (apiKey) => ipcRenderer.invoke('fetch-anthropic-models', apiKey),
   fetchGoogleModels: (apiKey) => ipcRenderer.invoke('fetch-google-models', apiKey),
+  kbGetDocumentStatus: (args) => ipcRenderer.invoke('kb-get-document-status', args),
+  kbAddDocument: (args) => ipcRenderer.invoke('kb-add-document', args),
+  kbDeleteDocument: (args) => ipcRenderer.invoke('kb-delete-document', args),
+  kbListDocuments: () => ipcRenderer.invoke('kb-list-documents'),
+  kbBuildContext: (args) => ipcRenderer.invoke('kb-build-context', args),
+  kbImportFileDialog: () => ipcRenderer.invoke('kb-import-file-dialog'),
+  kbImportFolderDialog: () => ipcRenderer.invoke('kb-import-folder-dialog'),
+  kbClearAll: () => ipcRenderer.invoke('kb-clear-all'),
+  onKbImportProgress: (cb) => ipcRenderer.on('kb-import-progress', (_, payload) => cb(payload)),
   getPathForFile: (file) => {
     if (!file) return '';
     try {

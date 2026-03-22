@@ -50,9 +50,54 @@ const importProgressTitle = document.getElementById('import-progress-title');
 const importProgressSubtitle = document.getElementById('import-progress-subtitle');
 const importProgressBar = document.getElementById('import-progress-bar');
 const importProgressMeta = document.getElementById('import-progress-meta');
+const kbDocControl = document.getElementById('kb-doc-control');
+const kbAddBtn = document.getElementById('kb-add-btn');
+const kbInsideBadge = document.getElementById('kb-inside-badge');
+const kbRemoveBtn = document.getElementById('kb-remove-btn');
+const kbSettingsList = document.getElementById('kb-settings-list');
+const kbHelpBtn = document.getElementById('kb-help-btn');
+const kbImportFileBtn = document.getElementById('kb-import-file-btn');
+const kbImportFolderBtn = document.getElementById('kb-import-folder-btn');
+const kbClearAllBtn = document.getElementById('kb-clear-all-btn');
+const kbImportProgress = document.getElementById('kb-import-progress');
+const kbImportProgressTitle = document.getElementById('kb-import-progress-title');
+const kbImportSpinner = document.getElementById('kb-import-spinner');
+const kbImportProgressMeta = document.getElementById('kb-import-progress-meta');
+const kbImportFileList = document.getElementById('kb-import-file-list');
 
 const SETTINGS_TAB = { type: 'settings', name: 'Settings' };
 const CHAT_TAB = { type: 'chat', name: 'Talk to your docs' };
+const KB_HELP_TAB = { type: 'kbHelp', name: 'Help - knowledgebase' };
+const KB_HELP_CONTENT = `# Help - knowledgebase
+
+This guide explains how to configure models so Knowledgebase retrieval works reliably.
+
+## 1) Minimum setup
+
+- Add at least one chat model in Settings -> Models.
+- Run LM Studio local server (default base URL: \`http://127.0.0.1:1234\`).
+- Ensure an embedding model is available in LM Studio for indexing/search.
+
+## 2) Recommended local setup (LM Studio)
+
+1. Open LM Studio and start the local server.
+2. Load an LLM model for chat responses.
+3. Load an embedding model (recommended: \`nomic-embed-text-v1.5\`).
+4. In MD Viewer, add LM Studio model in Settings -> Models.
+5. Import docs into Knowledgebase using Import file/folder.
+
+## 3) Commercial LLMs
+
+- OpenAI / Claude / Google models can be used for chat generation.
+- Knowledgebase indexing/retrieval still uses local embeddings path.
+- Configure API keys in Settings -> API Keys and add provider models.
+
+## 4) Troubleshooting
+
+- If import fails: verify LM Studio is running and embedding model is loaded.
+- If answers miss context: check docs are indexed in Knowledgebase list.
+- If runtime errors in LM Studio: install correct runtime for your model format.
+`;
 
 let chatMessagesData = [];
 let chatSessions = [];
@@ -74,6 +119,9 @@ let restoreDone = false;
 let pendingOpenPaths = [];
 let activePdfImportPath = '';
 const DEBUG_LLM_RAW_MARKDOWN = true;
+let activeDocKbState = null;
+let pendingKbReferenceFocus = null;
+let kbImportProgressState = null;
 
 // Theme
 function getSystemTheme() {
@@ -153,7 +201,15 @@ setDefaultMdBtn?.addEventListener('click', async () => {
 window.mdviewer?.onOpenSettings?.(openSettings);
 
 window.mdviewer?.onTabContextAction?.(({ action, index }) => {
-  if (action === 'close') {
+  if (action === 'addToKnowledgebase') {
+    if (index === activeIndex) addActiveDocumentToKnowledgebase();
+    else {
+      activeIndex = index;
+      renderTabs();
+      renderActive();
+      addActiveDocumentToKnowledgebase();
+    }
+  } else if (action === 'close') {
     closeTab(index);
   } else if (action === 'closeOthers') {
     tabs = [tabs[index]];
@@ -161,8 +217,19 @@ window.mdviewer?.onTabContextAction?.(({ action, index }) => {
     renderTabs();
     renderActive();
     saveOpenTabs();
+  } else if (action === 'closeAll') {
+    tabs = [];
+    activeIndex = 0;
+    hideKbDocControl();
+    dropzone.classList.remove('hidden');
+    viewer.style.display = 'none';
+    renderTabs();
+    saveOpenTabs();
   }
 });
+
+kbAddBtn?.addEventListener('click', addActiveDocumentToKnowledgebase);
+kbRemoveBtn?.addEventListener('click', removeActiveDocumentFromKnowledgebase);
 
 function closeTab(idx) {
   tabs.splice(idx, 1);
@@ -288,12 +355,244 @@ function renderMathInContainer(container) {
   } catch (_) {}
 }
 
+function clearChunkHighlights() {
+  markdownEl?.querySelectorAll('.chunk-highlight').forEach((el) => {
+    const parent = el.parentNode;
+    if (!parent) return;
+    parent.replaceChild(document.createTextNode(el.textContent), el);
+    parent.normalize();
+  });
+  markdownEl?.querySelectorAll('.chunk-focus-block').forEach((el) => {
+    el.classList.remove('chunk-focus-block');
+  });
+}
+
+function applyChunkHighlights(term) {
+  clearChunkHighlights();
+  const raw = String(term || '').trim();
+  if (!raw || !markdownEl) return false;
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(escapeRe(raw), 'gi');
+  const walker = document.createTreeWalker(markdownEl, NodeFilter.SHOW_TEXT, null, false);
+  const textNodes = [];
+  let n;
+  while ((n = walker.nextNode())) textNodes.push(n);
+  let hitCount = 0;
+
+  textNodes.forEach((node) => {
+    const text = node.textContent;
+    const matches = [...text.matchAll(re)];
+    if (!matches.length) return;
+    const frag = document.createDocumentFragment();
+    let lastEnd = 0;
+    for (const m of matches) {
+      frag.appendChild(document.createTextNode(text.slice(lastEnd, m.index)));
+      const mark = document.createElement('mark');
+      mark.className = 'chunk-highlight';
+      mark.textContent = m[0];
+      frag.appendChild(mark);
+      hitCount += 1;
+      lastEnd = m.index + m[0].length;
+    }
+    frag.appendChild(document.createTextNode(text.slice(lastEnd)));
+    node.parentNode.replaceChild(frag, node);
+  });
+  return hitCount > 0;
+}
+
+function findChunkFocusBlock(anchor) {
+  const normalizedAnchor = String(anchor || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalizedAnchor || !markdownEl) return null;
+  const blocks = markdownEl.querySelectorAll('p, li, pre, blockquote, table, h1, h2, h3, h4, h5, h6');
+  let best = null;
+  let bestScore = -1;
+  blocks.forEach((node) => {
+    const text = String(node.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text) return;
+    if (text.includes(normalizedAnchor)) {
+      const score = normalizedAnchor.length;
+      if (score > bestScore) {
+        best = node;
+        bestScore = score;
+      }
+      return;
+    }
+    if (normalizedAnchor.includes(text) && text.length > 30) {
+      const score = text.length - 10;
+      if (score > bestScore) {
+        best = node;
+        bestScore = score;
+      }
+    }
+  });
+  return best;
+}
+
+function focusChunkAnchor(anchor) {
+  const clean = String(anchor || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return false;
+  clearChunkHighlights();
+  const block = findChunkFocusBlock(clean);
+  if (block) {
+    block.classList.add('chunk-focus-block');
+    block.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return true;
+  }
+  const candidates = [];
+  candidates.push(clean.slice(0, Math.min(160, clean.length)));
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length >= 10) candidates.push(words.slice(0, 10).join(' '));
+  if (words.length >= 6) candidates.push(words.slice(0, 6).join(' '));
+  let found = false;
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (applyChunkHighlights(candidate)) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    clearChunkHighlights();
+    return false;
+  }
+  const first = markdownEl.querySelector('.chunk-highlight');
+  first?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  return true;
+}
+
+async function openKbReferenceTarget(path, anchor) {
+  const targetPath = String(path || '').trim();
+  if (!targetPath) return;
+  pendingKbReferenceFocus = { path: targetPath, anchor: String(anchor || '') };
+  const f = await loadFile(targetPath);
+  if (!f) return;
+  tabs.push({ type: 'file', ...f });
+  activeIndex = tabs.length - 1;
+  dropzone.classList.add('hidden');
+  viewer.style.display = 'block';
+  renderTabs();
+  renderActive();
+  saveOpenTabs();
+}
+
+function openKnowledgebaseHelpTab() {
+  const idx = tabs.findIndex((t) => t.type === 'kbHelp');
+  if (idx >= 0) {
+    activeIndex = idx;
+    renderTabs();
+    renderActive();
+    return;
+  }
+  tabs.push({
+    ...KB_HELP_TAB,
+    content: KB_HELP_CONTENT,
+    path: null,
+  });
+  activeIndex = tabs.length - 1;
+  dropzone.classList.add('hidden');
+  viewer.style.display = 'block';
+  renderTabs();
+  renderActive();
+}
+
+function hideKbDocControl() {
+  kbDocControl?.classList.add('hidden');
+  kbInsideBadge?.classList.add('hidden');
+  if (kbAddBtn) kbAddBtn.style.display = 'none';
+  activeDocKbState = null;
+}
+
+function renderKbDocControlState(status) {
+  if (!kbDocControl || !kbAddBtn || !kbInsideBadge) return;
+  const isInKb = Boolean(status?.inKnowledgebase);
+  const staleByPath = Boolean(status?.staleByPath);
+  kbDocControl.classList.remove('hidden');
+  kbAddBtn.style.display = isInKb ? 'none' : 'inline-flex';
+  kbAddBtn.textContent = staleByPath ? 'Re-index in knowledgebase' : 'Add to knowledgebase';
+  kbInsideBadge.classList.toggle('hidden', !isInKb);
+}
+
+async function refreshActiveDocumentKbState() {
+  const tab = tabs[activeIndex];
+  if (!tab || tab.type !== 'file') {
+    hideKbDocControl();
+    return;
+  }
+  try {
+    const status = await window.mdviewer?.kbGetDocumentStatus?.({
+      path: tab.path,
+      content: tab.content || '',
+    });
+    activeDocKbState = {
+      docFingerprint: status?.docFingerprint || null,
+      inKnowledgebase: Boolean(status?.inKnowledgebase),
+      staleByPath: Boolean(status?.staleByPath),
+      staleFingerprints: status?.staleFingerprints || [],
+      path: tab.path,
+      content: tab.content || '',
+    };
+    renderKbDocControlState(activeDocKbState);
+  } catch (_) {
+    hideKbDocControl();
+  }
+}
+
+async function addActiveDocumentToKnowledgebase() {
+  const tab = tabs[activeIndex];
+  if (!tab || tab.type !== 'file') return;
+  kbAddBtn.disabled = true;
+  try {
+    const res = await window.mdviewer?.kbAddDocument?.({
+      path: tab.path,
+      content: tab.content || '',
+      replacePathVersions: Boolean(activeDocKbState?.staleByPath),
+    });
+    if (!res?.ok) throw new Error(res?.error || 'Failed to add document to knowledgebase');
+    await refreshActiveDocumentKbState();
+    await renderKnowledgebaseSettingsList();
+  } catch (err) {
+    alert(err?.message || 'Failed to add document to knowledgebase');
+  } finally {
+    kbAddBtn.disabled = false;
+  }
+}
+
+async function removeActiveDocumentFromKnowledgebase() {
+  if (!activeDocKbState?.docFingerprint) return;
+  const confirmed = window.confirm('Delete this document and all its chunks from the knowledgebase?');
+  if (!confirmed) return;
+  kbRemoveBtn.disabled = true;
+  try {
+    const res = await window.mdviewer?.kbDeleteDocument?.({
+      docFingerprint: activeDocKbState.docFingerprint,
+    });
+    if (!res?.ok) throw new Error(res?.error || 'Failed to delete from knowledgebase');
+    await refreshActiveDocumentKbState();
+    await renderKnowledgebaseSettingsList();
+  } catch (err) {
+    alert(err?.message || 'Failed to delete from knowledgebase');
+  } finally {
+    kbRemoveBtn.disabled = false;
+  }
+}
+
 function setupLinkHandler() {
   viewer.addEventListener('click', (e) => {
     const a = e.target.closest('a[href]');
     if (!a) return;
     const href = (a.getAttribute('href') || '').trim();
     if (!href) return;
+
+    if (/^kbref:\/\//i.test(href)) {
+      e.preventDefault();
+      try {
+        const parsed = new URL(href);
+        const refPath = parsed.searchParams.get('path') || '';
+        const anchor = parsed.searchParams.get('anchor') || '';
+        openKbReferenceTarget(refPath, anchor);
+      } catch (_) {}
+      return;
+    }
 
     if (href.startsWith('#')) return;
 
@@ -370,22 +669,42 @@ function renderActive() {
   hideExternalUrl();
   viewerChat?.classList.add('hidden');
   if (tab.type === 'settings') {
+    hideKbDocControl();
     viewerMarkdown?.classList.add('hidden');
     viewerSettings?.classList.remove('hidden');
     renderAiSettings();
+    renderKnowledgebaseSettingsList();
     return;
   }
   if (tab.type === 'chat') {
+    hideKbDocControl();
     viewerMarkdown?.classList.add('hidden');
     viewerSettings?.classList.add('hidden');
     viewerChat?.classList.remove('hidden');
     renderChatTab();
     return;
   }
+  if (tab.type === 'kbHelp') {
+    hideKbDocControl();
+    viewerMarkdown?.classList.remove('hidden');
+    viewerSettings?.classList.add('hidden');
+    currentFilePath = null;
+    parseAndRender(tab.content || '', null);
+    viewerMarkdown?.scrollTo?.(0, 0);
+    return;
+  }
   viewerMarkdown?.classList.remove('hidden');
   viewerSettings?.classList.add('hidden');
   currentFilePath = tab.path;
-  parseAndRender(tab.content, tab.path);
+  parseAndRender(tab.content, tab.path)
+    .then(() => {
+      if (pendingKbReferenceFocus && pendingKbReferenceFocus.path === tab.path) {
+        focusChunkAnchor(pendingKbReferenceFocus.anchor);
+        pendingKbReferenceFocus = null;
+      }
+    })
+    .catch(() => {});
+  refreshActiveDocumentKbState();
   applySearchHighlights(searchInput?.value?.trim() || '');
   viewerMarkdown?.scrollTo?.(0, 0);
 }
@@ -738,7 +1057,7 @@ async function updateTalkToDocButton() {
   btn.classList.toggle('disabled', getEnabledProviders().length === 0);
 }
 
-function openChatTab() {
+async function openChatTab() {
   if (getEnabledProviders().length === 0) {
     openSettings();
     return;
@@ -753,7 +1072,13 @@ function openChatTab() {
     viewer.style.display = 'block';
   }
   renderTabs();
-  renderActive();
+  hideExternalUrl();
+  hideKbDocControl();
+  viewerMarkdown?.classList.add('hidden');
+  viewerSettings?.classList.add('hidden');
+  viewerChat?.classList.remove('hidden');
+  await renderChatTab();
+  await createNewSession();
   saveOpenTabs();
 }
 
@@ -920,6 +1245,178 @@ async function renderAiSettings() {
   renderAiModelsList();
   populateApiKeyInputs();
   updateTalkToDocButton();
+}
+
+async function renderKnowledgebaseSettingsList() {
+  if (!kbSettingsList) return;
+  const res = await window.mdviewer?.kbListDocuments?.();
+  const docs = res?.documents || [];
+  if (!docs.length) {
+    kbSettingsList.innerHTML = '<div class="kb-settings-empty">No indexed documents yet.</div>';
+    return;
+  }
+  kbSettingsList.innerHTML = docs
+    .map(
+      (doc) => `<div class="kb-settings-item" data-fp="${escapeHtml(doc.docFingerprint)}">
+        <div class="kb-settings-meta">
+          <div class="kb-settings-summary">${escapeHtml(doc.summary || 'Untitled document')}${doc.stale ? ' <span class="kb-stale-badge">stale</span>' : ''}</div>
+          <div class="kb-settings-path">${escapeHtml(doc.path || doc.docFingerprint)}</div>
+        </div>
+        <button type="button" class="kb-settings-delete" data-fp="${escapeHtml(doc.docFingerprint)}">Delete</button>
+      </div>`
+    )
+    .join('');
+  kbSettingsList.querySelectorAll('.kb-settings-delete').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const fp = btn.dataset.fp;
+      if (!fp) return;
+      const confirmed = window.confirm('Delete this document and all its chunks from the knowledgebase?');
+      if (!confirmed) return;
+      btn.disabled = true;
+      const deleted = await window.mdviewer?.kbDeleteDocument?.({ docFingerprint: fp });
+      if (!deleted?.ok) {
+        alert(deleted?.error || 'Failed to delete from knowledgebase');
+      }
+      await renderKnowledgebaseSettingsList();
+      await refreshActiveDocumentKbState();
+    });
+  });
+}
+
+function summarizeKbImportResult(res) {
+  const imported = Number(res?.imported) || 0;
+  const skipped = Number(res?.skipped) || 0;
+  const failed = Number(res?.failed) || 0;
+  return `Imported: ${imported}, skipped: ${skipped}, failed: ${failed}`;
+}
+
+function fileNameFromPath(p) {
+  const safe = String(p || '');
+  const parts = safe.split(/[/\\]/).filter(Boolean);
+  return parts[parts.length - 1] || safe || 'unknown';
+}
+
+function statusLabel(status) {
+  if (status === 'processing') return 'Loading...';
+  if (status === 'imported') return 'Imported';
+  if (status === 'skipped') return 'Skipped';
+  if (status === 'failed') return 'Failed';
+  return 'Pending';
+}
+
+function renderKbImportProgress() {
+  if (!kbImportProgress || !kbImportProgressMeta || !kbImportFileList || !kbImportProgressTitle || !kbImportSpinner) return;
+  const state = kbImportProgressState;
+  if (!state || !state.files?.length) {
+    kbImportProgress.classList.add('hidden');
+    return;
+  }
+  kbImportProgress.classList.remove('hidden');
+  const items = state.items || {};
+  const total = state.files.length;
+  let done = 0;
+  let failed = 0;
+  let imported = 0;
+  let skipped = 0;
+  state.files.forEach((p) => {
+    const st = items[p] || 'pending';
+    if (st !== 'pending' && st !== 'processing') done += 1;
+    if (st === 'failed') failed += 1;
+    if (st === 'imported') imported += 1;
+    if (st === 'skipped') skipped += 1;
+  });
+  const active = !state.done;
+  kbImportProgressTitle.textContent = active ? 'Importing files...' : 'Import completed';
+  kbImportSpinner.classList.toggle('hidden', !active);
+  kbImportProgressMeta.textContent = active
+    ? `Processed ${done}/${total}`
+    : `Imported: ${imported}, skipped: ${skipped}, failed: ${failed}`;
+  kbImportFileList.innerHTML = state.files
+    .map((p) => {
+      const st = items[p] || 'pending';
+      return `<div class="kb-import-file-row">
+        <span class="kb-import-file-name" title="${escapeHtml(p)}">${escapeHtml(fileNameFromPath(p))}</span>
+        <span class="kb-import-file-status ${escapeHtml(st)}">${escapeHtml(statusLabel(st))}</span>
+      </div>`;
+    })
+    .join('');
+}
+
+function handleKbImportProgress(payload = {}) {
+  const stage = payload.stage;
+  if (stage === 'start') {
+    kbImportProgressState = {
+      files: payload.files || [],
+      items: Object.fromEntries((payload.files || []).map((p) => [p, 'pending'])),
+      done: false,
+    };
+    renderKbImportProgress();
+    return;
+  }
+  if (!kbImportProgressState) return;
+  if (stage === 'item' && payload.path) {
+    kbImportProgressState.items[payload.path] = payload.status || 'processing';
+    renderKbImportProgress();
+    return;
+  }
+  if (stage === 'done') {
+    kbImportProgressState.done = true;
+    renderKbImportProgress();
+  }
+}
+
+async function importKnowledgebaseFile() {
+  if (!kbImportFileBtn) return;
+  kbImportFileBtn.disabled = true;
+  try {
+    kbImportProgressState = null;
+    renderKbImportProgress();
+    const res = await window.mdviewer?.kbImportFileDialog?.();
+    if (!res?.ok) throw new Error(res?.error || 'Import failed');
+    if (!res?.cancelled) alert(summarizeKbImportResult(res));
+    await renderKnowledgebaseSettingsList();
+    await refreshActiveDocumentKbState();
+  } catch (err) {
+    alert(err?.message || 'Import failed');
+  } finally {
+    kbImportFileBtn.disabled = false;
+  }
+}
+
+async function importKnowledgebaseFolder() {
+  if (!kbImportFolderBtn) return;
+  kbImportFolderBtn.disabled = true;
+  try {
+    kbImportProgressState = null;
+    renderKbImportProgress();
+    const res = await window.mdviewer?.kbImportFolderDialog?.();
+    if (!res?.ok) throw new Error(res?.error || 'Import failed');
+    if (!res?.cancelled) alert(summarizeKbImportResult(res));
+    await renderKnowledgebaseSettingsList();
+    await refreshActiveDocumentKbState();
+  } catch (err) {
+    alert(err?.message || 'Import failed');
+  } finally {
+    kbImportFolderBtn.disabled = false;
+  }
+}
+
+async function clearKnowledgebaseAll() {
+  if (!kbClearAllBtn) return;
+  const confirmed = window.confirm('Clear entire knowledgebase? This removes all indexed documents and chunks.');
+  if (!confirmed) return;
+  kbClearAllBtn.disabled = true;
+  try {
+    const res = await window.mdviewer?.kbClearAll?.();
+    if (!res?.ok) throw new Error(res?.error || 'Failed to clear knowledgebase');
+    await renderKnowledgebaseSettingsList();
+    await refreshActiveDocumentKbState();
+  } catch (err) {
+    alert(err?.message || 'Failed to clear knowledgebase');
+  } finally {
+    kbClearAllBtn.disabled = false;
+  }
 }
 
 function initAiSettings() {
@@ -1589,6 +2086,56 @@ function buildContextDocumentsForApi(provider) {
   return docs;
 }
 
+async function buildKnowledgebaseContextForPrompt(prompt) {
+  try {
+    const res = await window.mdviewer?.kbBuildContext?.({ query: prompt });
+    return {
+      contextDocuments: res?.contextDocuments || [],
+      references: res?.references || [],
+    };
+  } catch (_) {
+    return { contextDocuments: [], references: [] };
+  }
+}
+
+function formatReferencesSection(references) {
+  const list = Array.isArray(references) ? references : [];
+  const lines = ['---', '**References used**'];
+  if (!list.length) {
+    lines.push('- None (no knowledgebase chunks matched this response).');
+    return lines.join('\n');
+  }
+  const fileName = (p) => {
+    const safe = String(p || '');
+    const parts = safe.split(/[/\\]/).filter(Boolean);
+    return parts[parts.length - 1] || safe || 'unknown';
+  };
+  const cap = list.slice(0, 8);
+  for (const ref of cap) {
+    const path = String(ref?.path || 'unknown');
+    const section = String(ref?.headingPath || '').trim();
+    const chunk = Number.isFinite(Number(ref?.chunkIndex)) ? `chunk ${Number(ref.chunkIndex) + 1}` : 'chunk ?';
+    const score = Number.isFinite(Number(ref?.score)) ? `sim ${(Number(ref.score) * 100).toFixed(1)}%` : null;
+    const anchor = String(ref?.anchor || '').replace(/\s+/g, ' ').trim();
+    const href = `kbref://open?path=${encodeURIComponent(path)}&anchor=${encodeURIComponent(anchor)}`;
+    const title = fileName(path);
+    const parts = [`[${title}](${href})`, section ? `section: ${section}` : null, chunk, score].filter(Boolean);
+    lines.push(`- ${parts.join(' | ')}`);
+  }
+  if (list.length > cap.length) {
+    lines.push(`- ... and ${list.length - cap.length} more`);
+  }
+  return lines.join('\n');
+}
+
+function appendReferencesToAnswer(content, references) {
+  const body = String(content || '').trimEnd();
+  const refs = formatReferencesSection(references);
+  if (!body) return refs;
+  if (/\*\*References used\*\*/.test(body)) return body;
+  return `${body}\n\n${refs}`;
+}
+
 let chatSending = false;
 let streamChunkHandler = null;
 let streamDoneHandler = null;
@@ -1677,7 +2224,9 @@ async function sendChatMessage() {
   chatMessagesData.push(loadingMsg);
   await renderChatMessages();
   scrollChatToShowPromptAtTop();
-  const contextDocuments = buildContextDocumentsForApi(provider);
+  const contextPack = await buildKnowledgebaseContextForPrompt(text);
+  const contextDocuments = contextPack.contextDocuments;
+  const responseReferences = contextPack.references;
   const messages = buildMessagesForApi(provider);
   const contextWindow = {
     maxContextLength: toInt(provider.maxContextLength),
@@ -1698,7 +2247,10 @@ async function sendChatMessage() {
       if (res?.error) {
         chatMessagesData.push({ role: 'assistant', content: '', error: res.error });
       } else {
-        chatMessagesData.push({ role: 'assistant', content: res.content || '' });
+        chatMessagesData.push({
+          role: 'assistant',
+          content: appendReferencesToAnswer(res.content || '', responseReferences),
+        });
       }
       await saveChatMessages();
     } catch (err) {
@@ -1738,7 +2290,7 @@ async function sendChatMessage() {
         chatMessagesData.push({ role: 'assistant', content: '', error: result.error });
       }
     } else if (lastMsg && lastMsg.role === 'assistant') {
-      lastMsg.content = accumulated || '';
+      lastMsg.content = appendReferencesToAnswer(accumulated || '', responseReferences);
       lastMsg.loading = false;
       delete lastMsg.error;
     }
@@ -1820,6 +2372,13 @@ function initChatTab() {
 initTheme();
 initAiSettings();
 initChatTab();
-document.getElementById('talk-to-doc-btn')?.addEventListener('click', openChatTab);
+window.mdviewer?.onKbImportProgress?.(handleKbImportProgress);
+kbHelpBtn?.addEventListener('click', openKnowledgebaseHelpTab);
+kbImportFileBtn?.addEventListener('click', importKnowledgebaseFile);
+kbImportFolderBtn?.addEventListener('click', importKnowledgebaseFolder);
+kbClearAllBtn?.addEventListener('click', clearKnowledgebaseAll);
+document.getElementById('talk-to-doc-btn')?.addEventListener('click', () => {
+  openChatTab();
+});
 updateTalkToDocButton();
 restoreOpenTabs();

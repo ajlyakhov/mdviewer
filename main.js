@@ -4,11 +4,13 @@ const fs = require('fs');
 const { execSync } = require('child_process');
 const { chatCompletion: llmChatCompletion, buildStreamRequest } = require('./llm-adapter');
 const { Worker } = require('worker_threads');
+const { createKnowledgebaseService, DEFAULT_EMBEDDING_MODEL } = require('./knowledgebase/service');
 
 let store;
 let mainWindow;
 let pendingOpenFile = null;
 let pdfParseLoader = null;
+let knowledgebase = null;
 
 function getWindow() {
   return BrowserWindow.getFocusedWindow() || mainWindow;
@@ -170,8 +172,14 @@ app.whenReady().then(async () => {
       activeSessionId: null,
       openTabs: [],
       activeTabPath: null,
+      knowledgebase: {
+        embeddingModel: DEFAULT_EMBEDDING_MODEL,
+        topK: 12,
+        maxPerDocument: 3,
+      },
     },
   });
+  knowledgebase = createKnowledgebaseService(app.getPath('userData'));
   setupMenu();
   createWindow();
 });
@@ -214,12 +222,21 @@ ipcMain.handle('show-tab-context-menu', (event, index) => {
   if (!win) return;
   const menu = Menu.buildFromTemplate([
     {
+      label: 'Add to knowledgebase',
+      click: () => event.sender.send('tab-context-action', { action: 'addToKnowledgebase', index }),
+    },
+    { type: 'separator' },
+    {
       label: 'Close Tab',
       click: () => event.sender.send('tab-context-action', { action: 'close', index }),
     },
     {
       label: 'Close All Other Tabs',
       click: () => event.sender.send('tab-context-action', { action: 'closeOthers', index }),
+    },
+    {
+      label: 'Close All',
+      click: () => event.sender.send('tab-context-action', { action: 'closeAll' }),
     },
   ]);
   menu.popup({ window: win });
@@ -526,6 +543,170 @@ ipcMain.handle('save-ai-config', (_, { aiProviders, aiApiKeys }) => {
   if (aiProviders !== undefined) store.set('aiProviders', aiProviders);
   if (aiApiKeys !== undefined) store.set('aiApiKeys', aiApiKeys);
   return { ok: true };
+});
+
+function getLmStudioEmbeddingConfig() {
+  const providers = store.get('aiProviders', []);
+  const apiKeys = store.get('aiApiKeys', {});
+  const kb = store.get('knowledgebase', {});
+  const lmProvider = providers.find((p) => p.type === 'lmstudio');
+  const baseUrl = lmProvider?.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
+  return {
+    baseUrl,
+    model: kb.embeddingModel || DEFAULT_EMBEDDING_MODEL,
+    topK: Number(kb.topK) > 0 ? Number(kb.topK) : 12,
+    maxPerDocument: Number(kb.maxPerDocument) > 0 ? Number(kb.maxPerDocument) : 3,
+  };
+}
+
+async function importFilesToKnowledgebase(filePaths = [], onProgress) {
+  if (!knowledgebase) return { ok: false, error: 'Knowledgebase unavailable' };
+  const cfg = getLmStudioEmbeddingConfig();
+  const files = [...new Set((filePaths || []).filter((p) => /\.(md|markdown)$/i.test(String(p || ''))))];
+  let imported = 0;
+  let skipped = 0;
+  const errors = [];
+  if (typeof onProgress === 'function') {
+    onProgress({ stage: 'start', files });
+  }
+  for (const filePath of files) {
+    try {
+      if (typeof onProgress === 'function') {
+        onProgress({ stage: 'item', path: filePath, status: 'processing' });
+      }
+      const content = await fs.promises.readFile(filePath, 'utf-8');
+      const res = await knowledgebase.addDocument({
+        path: filePath,
+        content,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        replacePathVersions: true,
+      });
+      if (res?.alreadyExists) {
+        skipped += 1;
+        if (typeof onProgress === 'function') {
+          onProgress({ stage: 'item', path: filePath, status: 'skipped' });
+        }
+      } else {
+        imported += 1;
+        if (typeof onProgress === 'function') {
+          onProgress({ stage: 'item', path: filePath, status: 'imported' });
+        }
+      }
+    } catch (err) {
+      errors.push({ path: filePath, error: err.message || String(err) });
+      if (typeof onProgress === 'function') {
+        onProgress({ stage: 'item', path: filePath, status: 'failed', error: err.message || String(err) });
+      }
+    }
+  }
+  const result = { ok: true, imported, skipped, failed: errors.length, errors };
+  if (typeof onProgress === 'function') {
+    onProgress({ stage: 'done', ...result });
+  }
+  return result;
+}
+
+ipcMain.handle('kb-get-document-status', async (_, { path: docPath, content }) => {
+  if (!knowledgebase) return { inKnowledgebase: false, docFingerprint: null, document: null };
+  return knowledgebase.getDocumentStatus({ path: docPath, content });
+});
+
+ipcMain.handle('kb-add-document', async (_, { path: docPath, content, replacePathVersions }) => {
+  if (!knowledgebase) return { ok: false, error: 'Knowledgebase unavailable' };
+  try {
+    const cfg = getLmStudioEmbeddingConfig();
+    const result = await knowledgebase.addDocument({
+      path: docPath,
+      content,
+      baseUrl: cfg.baseUrl,
+      model: cfg.model,
+      replacePathVersions: Boolean(replacePathVersions),
+    });
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kb-delete-document', async (_, { docFingerprint }) => {
+  if (!knowledgebase) return { ok: false, error: 'Knowledgebase unavailable' };
+  try {
+    return await knowledgebase.deleteDocumentByFingerprint(docFingerprint);
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kb-list-documents', async () => {
+  if (!knowledgebase) return { documents: [] };
+  try {
+    const documents = await knowledgebase.listDocuments();
+    return { documents };
+  } catch (err) {
+    return { documents: [], error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kb-import-file-dialog', async (event) => {
+  try {
+    const win = getWindow();
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    });
+    if (result.canceled || !result.filePaths?.length) {
+      return { ok: true, imported: 0, skipped: 0, failed: 0, cancelled: true };
+    }
+    return importFilesToKnowledgebase(result.filePaths, (payload) => {
+      event.sender.send('kb-import-progress', payload);
+    });
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kb-import-folder-dialog', async (event) => {
+  try {
+    const win = getWindow();
+    const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+    if (result.canceled || !result.filePaths?.length) {
+      return { ok: true, imported: 0, skipped: 0, failed: 0, cancelled: true };
+    }
+    const folder = result.filePaths[0];
+    const files = await collectMdFiles(folder);
+    return importFilesToKnowledgebase(files, (payload) => {
+      event.sender.send('kb-import-progress', payload);
+    });
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kb-clear-all', async () => {
+  if (!knowledgebase) return { ok: false, error: 'Knowledgebase unavailable' };
+  try {
+    return await knowledgebase.clearAll();
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kb-build-context', async (_, { query }) => {
+  if (!knowledgebase) return { contextDocuments: [] };
+  try {
+    const cfg = getLmStudioEmbeddingConfig();
+    const { contextDocuments, references } = await knowledgebase.buildContextDocuments({
+      query,
+      baseUrl: cfg.baseUrl,
+      model: cfg.model,
+      topK: cfg.topK,
+      maxPerDocument: cfg.maxPerDocument,
+    });
+    return { contextDocuments, references };
+  } catch (err) {
+    return { contextDocuments: [], references: [], error: err.message || String(err) };
+  }
 });
 
 ipcMain.handle('chat-completion', async (_, { providerId, messages, contextDocuments, contextWindow }) => {
