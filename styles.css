@@ -411,6 +411,52 @@ html[data-theme="dark"] .tab-close:hover { background: rgba(255,255,255,0.1); }
   font-size: 12px;
   color: var(--text-muted);
 }
+
+.ollama-remove-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.ollama-remove-modal.hidden { display: none; }
+
+.ollama-remove-card {
+  width: min(560px, calc(100vw - 32px));
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+}
+
+.ollama-remove-title {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+}
+
+.ollama-remove-subtitle {
+  margin: 0 0 14px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: pre-line;
+}
+
+.ollama-remove-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ollama-remove-footer {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
 @keyframes import-progress-indeterminate {
   0% { transform: translateX(-120%); }
   100% { transform: translateX(320%); }

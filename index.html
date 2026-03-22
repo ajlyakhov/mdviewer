@@ -231,6 +231,21 @@
     </div>
   </div>
 
+  <div class="ollama-remove-modal hidden" id="ollama-remove-modal" role="dialog" aria-modal="true" aria-labelledby="ollama-remove-title">
+    <div class="ollama-remove-card">
+      <h3 class="ollama-remove-title" id="ollama-remove-title">Remove Ollama provider</h3>
+      <p class="ollama-remove-subtitle" id="ollama-remove-subtitle"></p>
+      <div class="ollama-remove-actions">
+        <button type="button" class="btn btn-primary" id="ollama-remove-uninstall">Uninstall Ollama + data</button>
+        <button type="button" class="btn" id="ollama-remove-shutdown">Shutdown only (keep files)</button>
+        <button type="button" class="btn" id="ollama-remove-keep">Keep running (remove provider only)</button>
+      </div>
+      <div class="ollama-remove-footer">
+        <button type="button" class="btn" id="ollama-remove-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="node_modules/marked/marked.min.js"></script>
   <script src="node_modules/marked-highlight/lib/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>

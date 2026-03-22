@@ -524,23 +524,330 @@ function unitToBytes(value, unit) {
   return Math.round(n * m);
 }
 
-function parseOllamaPullLine(rawLine) {
-  const line = stripTerminalControl(rawLine);
-  if (!line) return null;
-  const percentMatch = line.match(/(\d{1,3})%/);
-  if (percentMatch) {
-    const pct = Math.max(0, Math.min(100, Number(percentMatch[1]) || 0));
-    return { current: pct, total: 100, meta: line };
+function bytesToHuman(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = n;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
   }
-  const bytesMatch = line.match(/(\d+(?:\.\d+)?)\s*([KMGT]?B)\s*\/\s*(\d+(?:\.\d+)?)\s*([KMGT]?B)/i);
-  if (bytesMatch) {
-    const current = unitToBytes(bytesMatch[1], bytesMatch[2]);
-    const total = unitToBytes(bytesMatch[3], bytesMatch[4]);
-    if (Number.isFinite(current) && Number.isFinite(total) && total > 0) {
-      return { current, total, meta: line };
+  const digits = value >= 100 || idx === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[idx]}`;
+}
+
+function durationToHuman(seconds) {
+  const sec = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (sec < 60) return `${sec}s`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  return `${m}m ${s}s`;
+}
+
+function prettifyOllamaStatus(status) {
+  const raw = String(status || '').trim();
+  if (!raw) return 'Preparing download';
+  if (/^pulling\s+manifest/i.test(raw)) return 'Resolving model manifest';
+  if (/^pulling\s+/i.test(raw)) return 'Downloading model layer';
+  const masked = raw.replace(/\b[0-9a-f]{8,64}\b/gi, 'layer');
+  if (/^verifying\s+sha256\s+digest/i.test(raw)) return 'Verifying download';
+  if (/^writing\s+manifest/i.test(raw)) return 'Finalizing model';
+  if (/^removing\s+any\s+unused\s+layers/i.test(raw)) return 'Cleaning up layers';
+  return masked;
+}
+
+function sendOllamaDebug(sender, event, payload = {}) {
+  const msg = { source: 'main', event, payload, ts: Date.now() };
+  try {
+    sender?.send('ollama-debug', msg);
+  } catch (_) {}
+}
+
+function toShellSingleQuoted(value) {
+  const v = String(value ?? '');
+  return `'${v.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function probeUrl(url, timeoutMs = 8000) {
+  const http = require('http');
+  const https = require('https');
+  const { URL } = require('url');
+  return new Promise((resolve) => {
+    try {
+      const u = new URL(url);
+      const transport = u.protocol === 'https:' ? https : http;
+      const req = transport.request(
+        {
+          hostname: u.hostname,
+          port: u.port || (u.protocol === 'https:' ? 443 : 80),
+          path: u.pathname + u.search,
+          method: 'GET',
+          headers: { 'User-Agent': 'mdviewer-ollama-setup' },
+        },
+        (res) => {
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 500,
+            statusCode: res.statusCode,
+          });
+          res.resume();
+        }
+      );
+      req.on('error', (err) => resolve({ ok: false, error: err?.message || String(err) }));
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error(`timeout after ${timeoutMs}ms`));
+      });
+      req.end();
+    } catch (err) {
+      resolve({ ok: false, error: err?.message || String(err) });
     }
+  });
+}
+
+async function runOllamaConnectivityPreflight({ baseUrl, sender, model }) {
+  const root = normalizeLocalBaseUrl(baseUrl, 'http://127.0.0.1:11434');
+  const localProbeUrl = `${root}/api/version`;
+  const registryProbeUrl = 'https://registry.ollama.ai/v2/';
+  const blobProbeUrl = 'https://ollama.com/';
+
+  const localProbe = await probeUrl(localProbeUrl, 6000);
+  sendOllamaDebug(sender, 'preflight-local-probe', { url: localProbeUrl, result: localProbe });
+  if (!localProbe.ok) {
+    return {
+      ok: false,
+      error: `Ollama local service is not reachable at ${root}.`,
+    };
   }
-  return { meta: line };
+
+  const registryProbe = await probeUrl(registryProbeUrl, 9000);
+  sendOllamaDebug(sender, 'preflight-registry-probe', { url: registryProbeUrl, result: registryProbe });
+  if (!registryProbe.ok) {
+    return {
+      ok: false,
+      error: 'Cannot reach Ollama registry (registry.ollama.ai). Check firewall/VPN/proxy and retry.',
+    };
+  }
+
+  const blobProbe = await probeUrl(blobProbeUrl, 9000);
+  sendOllamaDebug(sender, 'preflight-blob-probe', { url: blobProbeUrl, result: blobProbe });
+  if (!blobProbe.ok) {
+    return {
+      ok: false,
+      error: 'Outbound HTTPS connectivity looks restricted. Blob download may fail. Check firewall/VPN/proxy and retry.',
+    };
+  }
+
+  sendOllamaDebug(sender, 'preflight-ok', { model, baseUrl: root });
+  return { ok: true };
+}
+
+function formatPullMeta(current, total, bps) {
+  const pct = Math.max(0, Math.min(100, Math.round((current / total) * 100)));
+  const speedText = bps > 0 ? `${bytesToHuman(bps)}/s` : '';
+  const etaSec = bps > 0 ? Math.max(0, Math.round((total - current) / bps)) : null;
+  const etaText = Number.isFinite(etaSec) ? `ETA ${durationToHuman(etaSec)}` : '';
+  return `${bytesToHuman(current)} / ${bytesToHuman(total)} (${pct}%)${speedText ? ` · ${speedText}` : ''}${etaText ? ` · ${etaText}` : ''}`;
+}
+
+async function pullOllamaModelViaApi({ baseUrl, model, stage, sender, telemetryState }) {
+  const http = require('http');
+  const https = require('https');
+  const { URL } = require('url');
+  const root = normalizeLocalBaseUrl(baseUrl, 'http://127.0.0.1:11434');
+  const endpoint = new URL(`${root}/api/pull`);
+  const transport = endpoint.protocol === 'https:' ? https : http;
+  const state = telemetryState || { lastBytes: 0, lastTs: 0, bps: 0 };
+  const NO_PROGRESS_FAIL_FAST_SEC = 45;
+  const STALL_NO_SIZEINFO_FAIL_FAST_SEC = 120;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let sawByteProgress = false;
+    let latestStatus = 'starting';
+    let observedTotalBytes = null;
+    const startedAt = Date.now();
+    const heartbeat = setInterval(() => {
+      if (settled || sawByteProgress) return;
+      const elapsed = durationToHuman((Date.now() - startedAt) / 1000);
+      sendOllamaDebug(sender, 'pull-heartbeat', { stage, model, latestStatus, elapsed });
+      sendOllamaSetupProgress(sender, {
+        stage,
+        message: `Downloading ${model}`,
+        meta: `${prettifyOllamaStatus(latestStatus)} · waiting for size info (${elapsed})`,
+      });
+      const elapsedSec = (Date.now() - startedAt) / 1000;
+      const statusPretty = prettifyOllamaStatus(latestStatus);
+      if (
+        elapsedSec >= NO_PROGRESS_FAIL_FAST_SEC &&
+        !sawByteProgress &&
+        (Number.isFinite(observedTotalBytes) && observedTotalBytes > 0) &&
+        /Downloading model layer/i.test(statusPretty)
+      ) {
+        const totalHint = Number.isFinite(observedTotalBytes) && observedTotalBytes > 0
+          ? ` Layer size detected: ${bytesToHuman(observedTotalBytes)}.`
+          : '';
+        settleReject(
+          new Error(
+            `No download bytes received for ${NO_PROGRESS_FAIL_FAST_SEC}s while fetching model layers.${totalHint} ` +
+            'Likely network block to Cloudflare R2 blob storage (*.r2.cloudflarestorage.com:443).'
+          )
+        );
+      }
+      if (elapsedSec >= STALL_NO_SIZEINFO_FAIL_FAST_SEC && !sawByteProgress) {
+        settleReject(
+          new Error(
+            `No download byte progress for ${STALL_NO_SIZEINFO_FAIL_FAST_SEC}s. ` +
+            'Pull appears stalled (likely network path/proxy/firewall issue).'
+          )
+        );
+      }
+    }, 1200);
+    const settleResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      resolve(value);
+    };
+    const settleReject = (error) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      reject(error);
+    };
+    const requestBody = { model, stream: true };
+    const requestBodyJson = JSON.stringify(requestBody);
+    const curlCmd = [
+      'curl',
+      '-N',
+      '-X',
+      'POST',
+      toShellSingleQuoted(endpoint.toString()),
+      '-H',
+      toShellSingleQuoted('Content-Type: application/json'),
+      '-d',
+      toShellSingleQuoted(requestBodyJson),
+    ].join(' ');
+    sendOllamaDebug(sender, 'pull-request-manual-test', {
+      stage,
+      model,
+      method: 'POST',
+      url: endpoint.toString(),
+      headers: { 'Content-Type': 'application/json' },
+      body: requestBody,
+      curl: curlCmd,
+    });
+
+    const req = transport.request(
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port || (endpoint.protocol === 'https:' ? 443 : 80),
+        path: endpoint.pathname + endpoint.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      (res) => {
+        sendOllamaDebug(sender, 'pull-http-response', { stage, model, statusCode: res.statusCode });
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          let raw = '';
+          res.on('data', (chunk) => {
+            raw += chunk.toString('utf8');
+          });
+          res.on('end', () => {
+            sendOllamaDebug(sender, 'pull-http-error', { stage, model, body: raw || '' });
+            settleReject(new Error(raw || `Ollama pull failed (${res.statusCode})`));
+          });
+          return;
+        }
+        let buffer = '';
+        let lastEvtDebugAt = 0;
+        res.on('data', (chunk) => {
+          buffer += chunk.toString('utf8');
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const lineRaw of lines) {
+            const line = String(lineRaw || '').trim();
+            if (!line) continue;
+            let evt = null;
+            try {
+              evt = JSON.parse(line);
+            } catch (_) {
+              continue;
+            }
+            const nowDbg = Date.now();
+            if ((nowDbg - lastEvtDebugAt) > 400) {
+              sendOllamaDebug(sender, 'pull-evt', {
+                stage,
+                model,
+                status: prettifyOllamaStatus(evt?.status || ''),
+                completed: evt?.completed ?? null,
+                total: evt?.total ?? null,
+              });
+              lastEvtDebugAt = nowDbg;
+            }
+            if (evt?.error) {
+              sendOllamaDebug(sender, 'pull-evt-error', { stage, model, error: String(evt.error) });
+              settleReject(new Error(String(evt.error)));
+              return;
+            }
+            if (evt?.status) {
+              latestStatus = String(evt.status);
+            }
+            const total = evt?.total === null || evt?.total === undefined ? NaN : Number(evt.total);
+            const completed = evt?.completed === null || evt?.completed === undefined ? NaN : Number(evt.completed);
+            if (Number.isFinite(total) && total > 0) {
+              observedTotalBytes = total;
+            }
+            if (!Number.isFinite(total) || !Number.isFinite(completed) || total <= 0 || completed < 0) {
+              if (!sawByteProgress && evt?.status) {
+                const elapsed = durationToHuman((Date.now() - startedAt) / 1000);
+                sendOllamaSetupProgress(sender, {
+                  stage,
+                  message: `Downloading ${model}`,
+                  meta: `${prettifyOllamaStatus(latestStatus)} · waiting for size info (${elapsed})`,
+                });
+              }
+              continue;
+            }
+            sawByteProgress = true;
+            const now = Date.now();
+            let bps = 0;
+            if (state.lastTs > 0 && completed >= state.lastBytes && now > state.lastTs) {
+              const deltaBytes = completed - state.lastBytes;
+              const deltaSec = (now - state.lastTs) / 1000;
+              if (deltaBytes > 0 && deltaSec > 0) bps = deltaBytes / deltaSec;
+            }
+            if (bps > 0) {
+              state.bps = state.bps > 0 ? (state.bps * 0.7) + (bps * 0.3) : bps;
+            }
+            state.lastBytes = completed;
+            state.lastTs = now;
+            sendOllamaSetupProgress(sender, {
+              stage,
+              current: completed,
+              total,
+              message: `Downloading ${model}`,
+              meta: formatPullMeta(completed, total, state.bps),
+            });
+          }
+        });
+        res.on('end', () => {
+          sendOllamaDebug(sender, 'pull-end', { stage, model, sawByteProgress });
+          settleResolve({ ok: true });
+        });
+      }
+    );
+    req.on('error', (err) => {
+      sendOllamaDebug(sender, 'pull-request-error', { stage, model, error: err?.message || String(err) });
+      settleReject(err);
+    });
+    sendOllamaDebug(sender, 'pull-request-start', { stage, model, url: endpoint.toString() });
+    req.write(requestBodyJson);
+    req.end();
+  });
 }
 
 function runCommandCapture(command, args = [], options = {}) {
@@ -662,7 +969,7 @@ function parseOllamaTagsPayload(payload) {
     embeddingModels,
     hasLlm: llmModels.length > 0,
     hasEmbedding: embeddingModels.length > 0,
-    recommendedChatModels: ['qwen2.5:7b', 'llama3.1:8b', 'mistral:7b'],
+    recommendedChatModels: ['qwen3.5:4b', 'qwen3.5', 'llama3.1:8b'],
     recommendedEmbeddingModels: ['nomic-embed-text', 'mxbai-embed-large'],
   };
 }
@@ -679,6 +986,13 @@ async function checkOllamaAvailability(baseUrl) {
 }
 
 function sendOllamaSetupProgress(sender, payload = {}) {
+  sendOllamaDebug(sender, 'setup-progress', {
+    stage: payload.stage || '',
+    message: payload.message || '',
+    meta: payload.meta || '',
+    current: Number(payload.current) || 0,
+    total: Number(payload.total) || null,
+  });
   sender?.send('ollama-setup-progress', {
     message: payload.message || '',
     meta: payload.meta || '',
@@ -790,24 +1104,128 @@ async function tryPrivilegedRm(targets = []) {
   return { ok: false, error: sudoTry.stderr || sudoTry.stdout || 'Privileged cleanup failed' };
 }
 
+function getOllamaKnownPaths() {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const dataTargets = [];
+  const binaryTargets = [];
+  const pushIf = (arr, p) => {
+    if (!p || !String(p).trim()) return;
+    arr.push(p);
+  };
+
+  if (process.platform === 'win32') {
+    pushIf(dataTargets, home ? path.join(home, '.ollama') : '');
+    pushIf(dataTargets, localAppData ? path.join(localAppData, 'Ollama') : '');
+    pushIf(binaryTargets, localAppData ? path.join(localAppData, 'Programs', 'Ollama') : '');
+  } else if (process.platform === 'darwin') {
+    pushIf(dataTargets, home ? path.join(home, '.ollama') : '');
+    pushIf(binaryTargets, '/Applications/Ollama.app');
+    pushIf(binaryTargets, '/opt/homebrew/bin/ollama');
+    pushIf(binaryTargets, '/usr/local/bin/ollama');
+  } else {
+    pushIf(dataTargets, home ? path.join(home, '.ollama') : '');
+    pushIf(binaryTargets, '/usr/local/bin/ollama');
+    pushIf(binaryTargets, '/usr/bin/ollama');
+    pushIf(binaryTargets, '/usr/share/ollama');
+    pushIf(binaryTargets, '/var/lib/ollama');
+    pushIf(binaryTargets, '/etc/systemd/system/ollama.service');
+    pushIf(binaryTargets, '/lib/systemd/system/ollama.service');
+  }
+  return { dataTargets, binaryTargets };
+}
+
+async function getPathSizeBytes(targetPath) {
+  if (!targetPath || !fs.existsSync(targetPath)) return 0;
+  let total = 0;
+  const stack = [targetPath];
+  while (stack.length) {
+    const current = stack.pop();
+    let stat;
+    try {
+      stat = await fs.promises.lstat(current);
+    } catch (_) {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      let children = [];
+      try {
+        children = await fs.promises.readdir(current);
+      } catch (_) {
+        continue;
+      }
+      for (const child of children) stack.push(path.join(current, child));
+      continue;
+    }
+    total += Number(stat.size) || 0;
+  }
+  return total;
+}
+
+async function stopOllamaProcesses() {
+  if (process.platform === 'win32') {
+    await runCommandCapture('taskkill', ['/F', '/IM', 'ollama.exe'], { shell: true });
+  } else {
+    await runCommandCapture('/bin/bash', ['-lc', 'pkill -f "[/]ollama" || true']);
+  }
+  return { ok: true };
+}
+
+async function getOllamaRemovalInfo(args = {}) {
+  try {
+    const baseUrl = normalizeLocalBaseUrl(args.baseUrl, 'http://127.0.0.1:11434');
+    const { dataTargets, binaryTargets } = getOllamaKnownPaths();
+    const targets = [...new Set([...dataTargets, ...binaryTargets])];
+    const details = [];
+    let dataBytes = 0;
+    let binaryBytes = 0;
+    for (const t of targets) {
+      if (!fs.existsSync(t)) continue;
+      const bytes = await getPathSizeBytes(t);
+      const isData = dataTargets.includes(t);
+      details.push({ path: t, bytes, category: isData ? 'data' : 'binary' });
+      if (isData) dataBytes += bytes;
+      else binaryBytes += bytes;
+    }
+    const status = await checkOllamaAvailability(baseUrl);
+    return {
+      ok: true,
+      reachable: Boolean(status?.ok),
+      dataBytes,
+      binaryBytes,
+      totalBytes: dataBytes + binaryBytes,
+      targets: details,
+    };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+async function shutdownOllama(args = {}) {
+  const baseUrl = normalizeLocalBaseUrl(args.baseUrl, 'http://127.0.0.1:11434');
+  await stopOllamaProcesses();
+  const check = await checkOllamaAvailability(baseUrl);
+  if (check?.ok) {
+    return {
+      ok: false,
+      stillReachable: true,
+      error: 'Ollama endpoint is still reachable. Another Ollama instance may still be running.',
+    };
+  }
+  return { ok: true, stillReachable: false };
+}
+
 async function uninstallOllama(args = {}, sender) {
   const baseUrl = normalizeLocalBaseUrl(args.baseUrl, 'http://127.0.0.1:11434');
   const progress = (current, total, message, meta = '') =>
     sendOllamaSetupProgress(sender, { stage: 'uninstall', current, total, message, meta });
 
   progress(1, 5, 'Stopping Ollama service', 'Cleaning running processes...');
-  if (process.platform === 'win32') {
-    await runCommandCapture('taskkill', ['/F', '/IM', 'ollama.exe'], { shell: true });
-  } else {
-    await runCommandCapture('/bin/bash', ['-lc', 'pkill -f "[/]ollama" || true']);
-  }
+  await stopOllamaProcesses();
 
   progress(2, 5, 'Removing Ollama models data', 'Deleting local model cache...');
-  const home = process.env.HOME || process.env.USERPROFILE || '';
   const localAppData = process.env.LOCALAPPDATA || '';
-  const userTargets = process.platform === 'win32'
-    ? [path.join(home, '.ollama'), path.join(localAppData, 'Ollama')]
-    : [path.join(home, '.ollama')];
+  const { dataTargets: userTargets } = getOllamaKnownPaths();
   for (const t of userTargets) await removePathIfExists(t);
 
   progress(3, 5, 'Removing executable files', 'Deleting app binaries...');
@@ -1435,7 +1853,7 @@ ipcMain.handle('check-lmstudio-availability', async (_, baseUrl) => {
       embeddingModels,
       hasLlm: llmModels.length > 0,
       hasEmbedding: embeddingModels.length > 0,
-      recommendedChatModels: ['qwen2.5-7b-instruct', 'llama-3.1-8b-instruct', 'mistral-7b-instruct'],
+      recommendedChatModels: ['qwen3.5:4b', 'qwen3.5', 'llama-3.1-8b-instruct'],
       recommendedEmbeddingModels: ['nomic-embed-text-v1.5', 'mxbai-embed-large-v1'],
     };
   } catch (err) {
@@ -1451,6 +1869,14 @@ ipcMain.handle('fetch-ollama-models', async (_, baseUrl) => {
 
 ipcMain.handle('check-ollama-availability', async (_, baseUrl) => {
   return checkOllamaAvailability(baseUrl);
+});
+
+ipcMain.handle('get-ollama-removal-info', async (_, args = {}) => {
+  return getOllamaRemovalInfo(args);
+});
+
+ipcMain.handle('shutdown-ollama', async (_, args = {}) => {
+  return shutdownOllama(args);
 });
 
 ipcMain.handle('uninstall-ollama', async (event, args = {}) => {
@@ -1471,9 +1897,13 @@ ipcMain.handle('uninstall-ollama', async (event, args = {}) => {
 ipcMain.handle('start-ollama-autosetup', async (event, args = {}) => {
   const sender = event.sender;
   const baseUrl = normalizeLocalBaseUrl(args.baseUrl, 'http://127.0.0.1:11434');
-  const chatModel = String(args.chatModel || 'qwen2.5:7b').trim() || 'qwen2.5:7b';
+  const chatModel = String(args.chatModel || 'qwen3.5:4b').trim() || 'qwen3.5:4b';
   const embeddingModel = String(args.embeddingModel || 'nomic-embed-text').trim() || 'nomic-embed-text';
-  const totalStages = 5;
+  const pullTelemetry = {
+    'pull-chat': { lastBytes: 0, lastTs: 0, bps: 0 },
+    'pull-embedding': { lastBytes: 0, lastTs: 0, bps: 0 },
+  };
+  const totalStages = 6;
   const finish = (payload) => {
     sender?.send('ollama-setup-done', payload);
     return payload;
@@ -1505,24 +1935,33 @@ ipcMain.handle('start-ollama-autosetup', async (event, args = {}) => {
       });
     }
     sendOllamaSetupProgress(sender, {
-      stage: 'pull-chat',
+      stage: 'preflight',
       current: 3,
       total: totalStages,
-      message: `Downloading ${chatModel}`,
-      meta: 'This can take a while depending on your network.',
+      message: 'Checking network connectivity',
+      meta: 'Verifying local Ollama + registry access...',
     });
-    const chatPull = await runCommandProgress(ollamaCmd, ['pull', chatModel], {
-      shell: process.platform === 'win32',
-      onLine: (line) => {
-        const parsed = parseOllamaPullLine(line) || {};
-        sendOllamaSetupProgress(sender, {
-          stage: 'pull-chat',
-          current: parsed.current,
-          total: parsed.total,
-          message: `Downloading ${chatModel}`,
-          meta: parsed.meta || line,
-        });
-      },
+    const preflight = await runOllamaConnectivityPreflight({ baseUrl, sender, model: chatModel });
+    if (!preflight?.ok) {
+      return finish({
+        ok: false,
+        error: preflight?.error || 'Connectivity preflight failed',
+        message: 'Network check failed',
+      });
+    }
+    sendOllamaSetupProgress(sender, {
+      stage: 'pull-chat',
+      current: 4,
+      total: totalStages,
+      message: `Downloading ${chatModel}`,
+      meta: 'Starting model download...',
+    });
+    const chatPull = await pullOllamaModelViaApi({
+      baseUrl,
+      model: chatModel,
+      stage: 'pull-chat',
+      sender,
+      telemetryState: pullTelemetry['pull-chat'],
     });
     if (!chatPull?.ok) {
       return finish({
@@ -1533,23 +1972,17 @@ ipcMain.handle('start-ollama-autosetup', async (event, args = {}) => {
     }
     sendOllamaSetupProgress(sender, {
       stage: 'pull-embedding',
-      current: 4,
+      current: 5,
       total: totalStages,
       message: `Downloading ${embeddingModel}`,
-      meta: 'Preparing embedding model...',
+      meta: 'Starting model download...',
     });
-    const embPull = await runCommandProgress(ollamaCmd, ['pull', embeddingModel], {
-      shell: process.platform === 'win32',
-      onLine: (line) => {
-        const parsed = parseOllamaPullLine(line) || {};
-        sendOllamaSetupProgress(sender, {
-          stage: 'pull-embedding',
-          current: parsed.current,
-          total: parsed.total,
-          message: `Downloading ${embeddingModel}`,
-          meta: parsed.meta || line,
-        });
-      },
+    const embPull = await pullOllamaModelViaApi({
+      baseUrl,
+      model: embeddingModel,
+      stage: 'pull-embedding',
+      sender,
+      telemetryState: pullTelemetry['pull-embedding'],
     });
     if (!embPull?.ok) {
       return finish({
@@ -1560,7 +1993,7 @@ ipcMain.handle('start-ollama-autosetup', async (event, args = {}) => {
     }
     sendOllamaSetupProgress(sender, {
       stage: 'verify',
-      current: 5,
+      current: 6,
       total: totalStages,
       message: 'Verifying Ollama and models',
       meta: 'Running health check...',

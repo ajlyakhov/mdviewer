@@ -50,6 +50,12 @@ const importProgressTitle = document.getElementById('import-progress-title');
 const importProgressSubtitle = document.getElementById('import-progress-subtitle');
 const importProgressBar = document.getElementById('import-progress-bar');
 const importProgressMeta = document.getElementById('import-progress-meta');
+const ollamaRemoveModal = document.getElementById('ollama-remove-modal');
+const ollamaRemoveSubtitle = document.getElementById('ollama-remove-subtitle');
+const ollamaRemoveUninstallBtn = document.getElementById('ollama-remove-uninstall');
+const ollamaRemoveShutdownBtn = document.getElementById('ollama-remove-shutdown');
+const ollamaRemoveKeepBtn = document.getElementById('ollama-remove-keep');
+const ollamaRemoveCancelBtn = document.getElementById('ollama-remove-cancel');
 const kbDocControl = document.getElementById('kb-doc-control');
 const kbAddBtn = document.getElementById('kb-add-btn');
 const kbInsideBadge = document.getElementById('kb-inside-badge');
@@ -113,7 +119,7 @@ let searchCurrentIndex = 0;
 let restoreDone = false;
 let pendingOpenPaths = [];
 let activePdfImportPath = '';
-const DEBUG_LLM_RAW_MARKDOWN = true;
+const DEBUG_LLM_RAW_MARKDOWN = false;
 let activeDocKbState = null;
 let pendingKbReferenceFocus = null;
 let kbImportProgressState = null;
@@ -950,6 +956,29 @@ function getFileNameFromPath(filePath) {
   return parts[parts.length - 1] || 'PDF';
 }
 
+function logOllamaDebug(event, payload) {
+  if (event === 'progress') {
+    const now = Date.now();
+    const key = `${payload?.stage || ''}|${payload?.current || 0}|${payload?.total || 0}|${payload?.meta || ''}`;
+    if (!logOllamaDebug._last) {
+      logOllamaDebug._last = { ts: 0, key: '' };
+    }
+    const hasDeterminate = Number.isFinite(Number(payload?.total)) && Number(payload?.total) > 0;
+    if (!hasDeterminate && (now - logOllamaDebug._last.ts) < 8000) {
+      return;
+    }
+    if (logOllamaDebug._last.key === key && (now - logOllamaDebug._last.ts) < 2000) {
+      return;
+    }
+    logOllamaDebug._last = { ts: now, key };
+  }
+  // Keep this hook for optional troubleshooting without noisy console output.
+}
+window.mdviewer?.onOllamaDebug?.((msg) => {
+  // Debug messages are intentionally not echoed to renderer console by default.
+  void msg;
+});
+
 function showImportProgress(payload = {}) {
   if (!importProgressModal || !importProgressBar) return;
   const sourceFilePath = payload.filePath || activePdfImportPath || '';
@@ -1014,6 +1043,7 @@ window.mdviewer?.onPdfImportDone?.(() => {
   hideImportProgress();
 });
 window.mdviewer?.onOllamaSetupProgress?.((payload) => {
+  logOllamaDebug('progress', payload);
   const stage = String(payload?.stage || '');
   const isUninstall = stage === 'uninstall';
   showImportProgress({
@@ -1025,6 +1055,7 @@ window.mdviewer?.onOllamaSetupProgress?.((payload) => {
   });
 });
 window.mdviewer?.onOllamaSetupDone?.((payload) => {
+  logOllamaDebug('done', payload);
   if (!payload?.ok) {
     showImportProgress({
       title: 'Ollama setup failed',
@@ -1188,6 +1219,70 @@ function toInt(v) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
 
+function bytesToHuman(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = n;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  const digits = value >= 100 || idx === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[idx]}`;
+}
+
+async function askOllamaRemovalChoice(provider) {
+  const info = await window.mdviewer?.getOllamaRemovalInfo?.({ baseUrl: provider?.baseUrl });
+  const total = bytesToHuman(info?.totalBytes || 0);
+  const modelData = bytesToHuman(info?.dataBytes || 0);
+  const status = info?.reachable ? 'running/reachable' : 'not reachable';
+  if (!ollamaRemoveModal || !ollamaRemoveSubtitle || !ollamaRemoveUninstallBtn || !ollamaRemoveShutdownBtn || !ollamaRemoveKeepBtn || !ollamaRemoveCancelBtn) {
+    const fallbackConfirmed = window.confirm('Remove Ollama provider?');
+    return fallbackConfirmed ? { cancelled: false, choice: 'keep' } : { cancelled: true };
+  }
+  ollamaRemoveSubtitle.textContent =
+    `Detected disk usage: ${total} total (${modelData} models/data)\n` +
+    `Current status: ${status}\n\n` +
+    `Pick what to do before provider removal.`;
+  ollamaRemoveModal.classList.remove('hidden');
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      ollamaRemoveModal.classList.add('hidden');
+      resolve(payload);
+    };
+    const onUninstall = () => finish({ cancelled: false, choice: 'uninstall' });
+    const onShutdown = () => finish({ cancelled: false, choice: 'shutdown' });
+    const onKeep = () => finish({ cancelled: false, choice: 'keep' });
+    const onCancel = () => finish({ cancelled: true });
+    const onBackdrop = (e) => {
+      if (e.target === ollamaRemoveModal) finish({ cancelled: true });
+    };
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') finish({ cancelled: true });
+    };
+    const cleanup = () => {
+      ollamaRemoveUninstallBtn.removeEventListener('click', onUninstall);
+      ollamaRemoveShutdownBtn.removeEventListener('click', onShutdown);
+      ollamaRemoveKeepBtn.removeEventListener('click', onKeep);
+      ollamaRemoveCancelBtn.removeEventListener('click', onCancel);
+      ollamaRemoveModal.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKeydown);
+    };
+    ollamaRemoveUninstallBtn.addEventListener('click', onUninstall);
+    ollamaRemoveShutdownBtn.addEventListener('click', onShutdown);
+    ollamaRemoveKeepBtn.addEventListener('click', onKeep);
+    ollamaRemoveCancelBtn.addEventListener('click', onCancel);
+    ollamaRemoveModal.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKeydown);
+  });
+}
+
 function getProviderEffectiveContextLength(provider) {
   return (
     toInt(provider?.effectiveContextLength) ||
@@ -1232,6 +1327,28 @@ function renderAiModelsList() {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const id = btn.dataset.id;
+      const provider = aiProviders.find((p) => p.id === id);
+      if (!provider) return;
+      if (provider.type === 'ollama') {
+        const decision = await askOllamaRemovalChoice(provider);
+        if (decision?.cancelled) return;
+        if (decision.choice === 'uninstall') {
+          const result = await window.mdviewer?.uninstallOllama?.({ baseUrl: provider.baseUrl });
+          if (!result?.ok) {
+            alert(result?.error || 'Ollama uninstall failed.');
+            return;
+          }
+        } else if (decision.choice === 'shutdown') {
+          const result = await window.mdviewer?.shutdownOllama?.({ baseUrl: provider.baseUrl });
+          if (!result?.ok) {
+            alert(result?.error || 'Could not fully stop Ollama.');
+            return;
+          }
+        }
+      } else {
+        const confirmed = window.confirm('Remove this model provider?');
+        if (!confirmed) return;
+      }
       aiProviders = aiProviders.filter((p) => p.id !== id);
       await window.mdviewer?.saveAiConfig?.({ aiProviders });
       renderAiModelsList();
@@ -1455,7 +1572,7 @@ function initAiSettings() {
   const cloudHint = document.getElementById('ai-add-cloud-hint');
   const DEFAULT_LMSTUDIO_URL = 'http://localhost:1234';
   const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434';
-  const DEFAULT_OLLAMA_CHAT_MODEL = 'qwen2.5:7b';
+  const DEFAULT_OLLAMA_CHAT_MODEL = 'qwen3.5:4b';
   const DEFAULT_OLLAMA_EMBED_MODEL = 'nomic-embed-text';
   let lmStudioAutocheckTimer = null;
   let ollamaAutocheckTimer = null;
@@ -1518,13 +1635,15 @@ function initAiSettings() {
   }
   function syncOllamaSetupButtonVisibility() {
     if (!aiAddOllamaAutosetup) return;
-    const shouldShow = !lastOllamaAvailability?.ok;
+    const hasLlmModels = Array.isArray(lastOllamaAvailability?.llmModels) && lastOllamaAvailability.llmModels.length > 0;
+    const shouldShow = !lastOllamaAvailability?.ok || !hasLlmModels;
     aiAddOllamaAutosetup.classList.toggle('hidden', !shouldShow);
     aiAddOllamaAutosetup.disabled = wizardState.ollamaSetupRunning;
     aiAddOllamaAutosetup.textContent = wizardState.ollamaSetupRunning ? 'Setting up...' : 'Auto-setup';
   }
   function syncOllamaSectionVisibility() {
-    const isConfigured = Boolean(lastOllamaAvailability?.ok && wizardState.ollamaChecked);
+    const hasLlmModels = Array.isArray(lastOllamaAvailability?.llmModels) && lastOllamaAvailability.llmModels.length > 0;
+    const isConfigured = Boolean(lastOllamaAvailability?.ok && hasLlmModels);
     ollamaDetails?.classList.toggle('hidden', !isConfigured);
     syncOllamaSetupButtonVisibility();
   }
@@ -1657,6 +1776,7 @@ function initAiSettings() {
     syncOllamaSectionVisibility();
 
     const availability = await window.mdviewer?.checkOllamaAvailability?.(baseUrl);
+    logOllamaDebug('check-availability', { baseUrl, availability });
     lastOllamaAvailability = availability || null;
     const models = availability?.llmModels || [];
     const embeddingModels = availability?.embeddingModels || [];
@@ -1706,7 +1826,7 @@ function initAiSettings() {
         .join('');
       const preferredChatModel =
         models.find((m) => m.id === DEFAULT_OLLAMA_CHAT_MODEL)?.id ||
-        models.find((m) => String(m.id || '').startsWith('qwen2.5'))?.id ||
+        models.find((m) => String(m.id || '').startsWith('qwen3.5'))?.id ||
         String(models[0]?.id || '');
       ollamaSelect.value = preferredChatModel;
       if (ollamaEmbeddingSelect) {
@@ -1736,6 +1856,11 @@ function initAiSettings() {
 
   async function runOllamaAutoSetup() {
     if (wizardState.ollamaSetupRunning) return;
+    logOllamaDebug('autosetup-start', {
+      url: normalizeOllamaUrl(aiAddOllamaUrl?.value),
+      chatModel: (ollamaSelect?.value || DEFAULT_OLLAMA_CHAT_MODEL).trim() || DEFAULT_OLLAMA_CHAT_MODEL,
+      embeddingModel: (ollamaEmbeddingSelect?.value || DEFAULT_OLLAMA_EMBED_MODEL).trim() || DEFAULT_OLLAMA_EMBED_MODEL,
+    });
     wizardState.ollamaSetupRunning = true;
     syncOllamaSetupButtonVisibility();
     if (ollamaHint) ollamaHint.textContent = 'Running auto-setup...';
@@ -1749,12 +1874,14 @@ function initAiSettings() {
         chatModel,
         embeddingModel,
       });
+      logOllamaDebug('autosetup-result', result);
       if (!result?.ok) {
         throw new Error(result?.error || 'Auto-setup failed');
       }
       if (ollamaHint) ollamaHint.textContent = 'Auto-setup finished. Checking Ollama...';
       await checkOllamaAvailability(baseUrl);
     } catch (err) {
+      logOllamaDebug('autosetup-error', { message: err?.message || String(err) });
       setOllamaLamp('fail', `Ollama setup failed at ${baseUrl}`);
       if (ollamaHint) {
         ollamaHint.textContent = `${err?.message || 'Setup failed'}. Try Auto-setup again or use manual install URL.`;
