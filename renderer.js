@@ -961,10 +961,11 @@ function showImportProgress(payload = {}) {
   const percent = hasDeterminate ? Math.max(0, Math.min(100, Math.round((current / total) * 100))) : 0;
 
   importProgressModal.classList.remove('hidden');
-  if (importProgressTitle) importProgressTitle.textContent = 'Importing PDF...';
-  if (importProgressSubtitle) importProgressSubtitle.textContent = sourceName;
+  if (importProgressTitle) importProgressTitle.textContent = payload.title || 'Importing PDF...';
+  if (importProgressSubtitle) importProgressSubtitle.textContent = payload.subtitle || sourceName;
   if (importProgressMeta) {
-    if (hasDeterminate) importProgressMeta.textContent = `Processing page ${Math.min(total, Math.max(0, current))} of ${total}`;
+    if (payload.meta) importProgressMeta.textContent = payload.meta;
+    else if (hasDeterminate) importProgressMeta.textContent = `Processing page ${Math.min(total, Math.max(0, current))} of ${total}`;
     else importProgressMeta.textContent = 'Analyzing pages...';
   }
   if (hasDeterminate) {
@@ -1010,6 +1011,29 @@ window.mdviewer?.onPdfImportProgress?.((payload) => {
   showImportProgress(payload);
 });
 window.mdviewer?.onPdfImportDone?.(() => {
+  hideImportProgress();
+});
+window.mdviewer?.onOllamaSetupProgress?.((payload) => {
+  const stage = String(payload?.stage || '');
+  const isUninstall = stage === 'uninstall';
+  showImportProgress({
+    title: isUninstall ? 'Uninstalling Ollama...' : 'Setting up Ollama...',
+    subtitle: payload?.message || (isUninstall ? 'Removing local model engine' : 'Preparing local model engine'),
+    meta: payload?.meta || '',
+    current: payload?.current,
+    total: payload?.total,
+  });
+});
+window.mdviewer?.onOllamaSetupDone?.((payload) => {
+  if (!payload?.ok) {
+    showImportProgress({
+      title: 'Ollama setup failed',
+      subtitle: payload?.message || 'Setup failed',
+      meta: payload?.error || 'Try Auto-setup again or connect to an existing Ollama URL.',
+    });
+    setTimeout(() => hideImportProgress(), 1400);
+    return;
+  }
   hideImportProgress();
 });
 
@@ -1134,7 +1158,6 @@ async function restoreOpenTabs() {
 
 // AI Settings - Cursor-style
 let aiApiKeys = {};
-const aiModelSearch = document.getElementById('ai-model-search');
 const aiModelsList = document.getElementById('ai-models-list');
 const aiAddForm = document.getElementById('ai-add-model-form');
 const aiAddType = document.getElementById('ai-add-type');
@@ -1148,13 +1171,13 @@ const aiAddApiKeyWrap = document.getElementById('ai-add-api-key-wrap');
 const aiAddLmstudioUrl = document.getElementById('ai-add-lmstudio-url');
 const aiAddLmstudioLamp = document.getElementById('ai-add-lmstudio-lamp');
 const aiAddLmstudioCheckCustom = document.getElementById('ai-add-lmstudio-check-custom');
-const typeLabels = { lmstudio: 'LM Studio', openai: 'OpenAI', claude: 'Claude', google: 'Google AI' };
+const aiAddOllamaUrl = document.getElementById('ai-add-ollama-url');
+const aiAddOllamaLamp = document.getElementById('ai-add-ollama-lamp');
+const aiAddOllamaCheckCustom = document.getElementById('ai-add-ollama-check-custom');
+const aiAddOllamaAutosetup = document.getElementById('ai-add-ollama-autosetup');
+const typeLabels = { lmstudio: 'LM Studio', ollama: 'Ollama', openai: 'OpenAI', claude: 'Claude', google: 'Google AI' };
 let lmStudioModelMetaById = {};
 let cloudModelMetaById = {};
-
-function getModelSearch() {
-  return (aiModelSearch?.value || '').trim().toLowerCase();
-}
 
 function estimateTokens(text) {
   return Math.max(1, Math.ceil(String(text || '').length / APPROX_CHARS_PER_TOKEN));
@@ -1189,16 +1212,11 @@ function getProviderReservedOutputTokens(provider) {
 
 function renderAiModelsList() {
   if (!aiModelsList) return;
-  const q = getModelSearch();
   const rows = aiProviders
-    .filter((p) => {
-      const label = `${typeLabels[p.type] || p.type} / ${p.modelId || ''}`.toLowerCase();
-      return !q || label.includes(q);
-    })
     .map(
       (p) =>
         `<div class="ai-model-row" data-id="${escapeHtml(p.id)}">
-          <span class="ai-model-name">${escapeHtml(typeLabels[p.type] || p.type)} / ${escapeHtml(p.modelId || '-')}${p.type === 'lmstudio' ? ` <span class="kb-item-embed-label">(embeddings: ${escapeHtml(p.embeddingModel || 'MiniLM fallback')})</span>` : ''}</span>
+          <span class="ai-model-name">${escapeHtml(typeLabels[p.type] || p.type)} / ${escapeHtml(p.modelId || '-')}${(p.type === 'lmstudio' || p.type === 'ollama') ? ` <span class="kb-item-embed-label">(embeddings: ${escapeHtml(p.embeddingModel || 'MiniLM fallback')})</span>` : ''}</span>
           <div class="ai-model-actions">
             <button type="button" class="ai-model-remove" data-id="${escapeHtml(p.id)}" title="Remove">×</button>
             <div class="ai-toggle ${p.enabled !== false ? 'enabled' : ''}" data-id="${escapeHtml(p.id)}" role="button" tabindex="0"></div>
@@ -1206,7 +1224,7 @@ function renderAiModelsList() {
         </div>`
     )
     .join('');
-  aiModelsList.innerHTML = rows || '<div class="ai-model-row ai-model-empty"><span class="ai-model-name">No models. Click + to add one.</span></div>';
+  aiModelsList.innerHTML = rows || '';
   aiModelsList.querySelectorAll('.ai-toggle[data-id]').forEach((el) => {
     el.addEventListener('click', () => toggleModel(el.dataset.id));
   });
@@ -1260,6 +1278,7 @@ async function renderKnowledgebaseSettingsList() {
   const backendLabel = (doc) => {
     const key = String(doc?.embeddingBackend || '').toLowerCase();
     if (key === 'lmstudio') return 'LM Studio';
+    if (key === 'ollama') return 'Ollama';
     if (key === 'openai') return 'OpenAI';
     if (key === 'minilm') return 'MiniLM';
     return doc?.embeddingBackendLabel || 'Unknown';
@@ -1415,7 +1434,6 @@ async function clearKnowledgebaseAll() {
 }
 
 function initAiSettings() {
-  aiModelSearch?.addEventListener('input', renderAiModelsList);
   document.getElementById('ai-add-model-btn')?.addEventListener('click', openAddForm);
   document.getElementById('ai-refresh-models')?.addEventListener('click', () => {
     renderAiSettings();
@@ -1423,36 +1441,56 @@ function initAiSettings() {
 
   const addPlaceholders = { openai: 'e.g. gpt-4o', claude: 'e.g. claude-3-5-sonnet', google: 'e.g. gemini-1.5-flash' };
   const lmstudioWrap = document.getElementById('ai-add-lmstudio-wrap');
+  const ollamaWrap = document.getElementById('ai-add-ollama-wrap');
   const cloudWrap = document.getElementById('ai-add-cloud-wrap');
   const manualWrap = document.getElementById('ai-add-manual-wrap');
   const lmstudioSelect = document.getElementById('ai-add-lmstudio-model');
   const lmstudioEmbeddingSelect = document.getElementById('ai-add-lmstudio-embedding-model');
   const lmstudioHint = document.getElementById('ai-add-lmstudio-hint');
+  const ollamaDetails = document.getElementById('ai-add-ollama-details');
+  const ollamaSelect = document.getElementById('ai-add-ollama-model');
+  const ollamaEmbeddingSelect = document.getElementById('ai-add-ollama-embedding-model');
+  const ollamaHint = document.getElementById('ai-add-ollama-hint');
   const cloudSelect = document.getElementById('ai-add-cloud-model');
   const cloudHint = document.getElementById('ai-add-cloud-hint');
   const DEFAULT_LMSTUDIO_URL = 'http://localhost:1234';
+  const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434';
+  const DEFAULT_OLLAMA_CHAT_MODEL = 'qwen2.5:7b';
+  const DEFAULT_OLLAMA_EMBED_MODEL = 'nomic-embed-text';
   let lmStudioAutocheckTimer = null;
+  let ollamaAutocheckTimer = null;
   const cloudKeyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
   const wizardState = {
     checkedProvider: '',
     checkedModelType: '',
     verifiedApiKey: '',
     lmstudioChecked: false,
+    ollamaChecked: false,
+    ollamaSetupRunning: false,
   };
+  let lastOllamaAvailability = null;
 
   function resetWizardChecks() {
     wizardState.checkedProvider = '';
     wizardState.checkedModelType = '';
     wizardState.verifiedApiKey = '';
     wizardState.lmstudioChecked = false;
+    wizardState.ollamaChecked = false;
+    wizardState.ollamaSetupRunning = false;
+    lastOllamaAvailability = null;
     if (aiAddCheckHint) aiAddCheckHint.textContent = '';
     if (cloudHint) cloudHint.textContent = '';
     if (lmstudioHint) lmstudioHint.textContent = '';
+    if (ollamaHint) ollamaHint.textContent = '';
   }
 
   function normalizeLmStudioUrl(url) {
     const raw = String(url || '').trim();
     return raw || DEFAULT_LMSTUDIO_URL;
+  }
+  function normalizeOllamaUrl(url) {
+    const raw = String(url || '').trim();
+    return raw || DEFAULT_OLLAMA_URL;
   }
 
   function setLmStudioLamp(state, title = '') {
@@ -1461,11 +1499,34 @@ function initAiSettings() {
     if (state) aiAddLmstudioLamp.classList.add(state);
     aiAddLmstudioLamp.title = title || 'LM Studio status';
   }
+  function setOllamaLamp(state, title = '') {
+    if (!aiAddOllamaLamp) return;
+    aiAddOllamaLamp.classList.remove('ok', 'fail', 'checking');
+    if (state) aiAddOllamaLamp.classList.add(state);
+    aiAddOllamaLamp.title = title || 'Ollama status';
+  }
 
   function syncLmStudioCustomCheckButtonVisibility() {
     if (!aiAddLmstudioCheckCustom) return;
     const current = normalizeLmStudioUrl(aiAddLmstudioUrl?.value);
     aiAddLmstudioCheckCustom.classList.toggle('hidden', current === DEFAULT_LMSTUDIO_URL);
+  }
+  function syncOllamaCustomCheckButtonVisibility() {
+    if (!aiAddOllamaCheckCustom) return;
+    const current = normalizeOllamaUrl(aiAddOllamaUrl?.value);
+    aiAddOllamaCheckCustom.classList.toggle('hidden', current === DEFAULT_OLLAMA_URL);
+  }
+  function syncOllamaSetupButtonVisibility() {
+    if (!aiAddOllamaAutosetup) return;
+    const shouldShow = !lastOllamaAvailability?.ok;
+    aiAddOllamaAutosetup.classList.toggle('hidden', !shouldShow);
+    aiAddOllamaAutosetup.disabled = wizardState.ollamaSetupRunning;
+    aiAddOllamaAutosetup.textContent = wizardState.ollamaSetupRunning ? 'Setting up...' : 'Auto-setup';
+  }
+  function syncOllamaSectionVisibility() {
+    const isConfigured = Boolean(lastOllamaAvailability?.ok && wizardState.ollamaChecked);
+    ollamaDetails?.classList.toggle('hidden', !isConfigured);
+    syncOllamaSetupButtonVisibility();
   }
 
   function updateSaveButtonState() {
@@ -1473,6 +1534,8 @@ function initAiSettings() {
     let enabled = false;
     if (type === 'lmstudio') {
       enabled = Boolean(wizardState.lmstudioChecked && lmstudioSelect?.value);
+    } else if (type === 'ollama') {
+      enabled = Boolean(wizardState.ollamaChecked && ollamaSelect?.value);
     } else if (['openai', 'claude', 'google'].includes(type)) {
       const checked = wizardState.checkedProvider === type && wizardState.checkedModelType === 'cloud';
       enabled = Boolean(checked && cloudSelect?.value);
@@ -1569,6 +1632,140 @@ function initAiSettings() {
     }
   }
 
+  async function checkOllamaAvailability(baseUrlOverride) {
+    const baseUrl = normalizeOllamaUrl(
+      baseUrlOverride ||
+      aiAddOllamaUrl?.value ||
+      aiApiKeys.ollama?.baseUrl ||
+      aiProviders.find((p) => p.type === 'ollama')?.baseUrl ||
+      DEFAULT_OLLAMA_URL
+    );
+    if (aiAddOllamaUrl) aiAddOllamaUrl.value = baseUrl;
+    syncOllamaCustomCheckButtonVisibility();
+    setOllamaLamp('checking', `Checking ${baseUrl}`);
+    if (ollamaSelect) {
+      ollamaSelect.disabled = true;
+      ollamaSelect.innerHTML = '<option value="">Loading models...</option>';
+      if (ollamaHint) ollamaHint.textContent = '';
+    }
+    if (ollamaEmbeddingSelect) {
+      ollamaEmbeddingSelect.disabled = true;
+      ollamaEmbeddingSelect.innerHTML = `<option value="${escapeHtml(DEFAULT_OLLAMA_EMBED_MODEL)}">${escapeHtml(DEFAULT_OLLAMA_EMBED_MODEL)} (recommended)</option><option value="">Use MiniLM fallback (default)</option>`;
+    }
+    wizardState.ollamaChecked = false;
+    updateSaveButtonState();
+    syncOllamaSectionVisibility();
+
+    const availability = await window.mdviewer?.checkOllamaAvailability?.(baseUrl);
+    lastOllamaAvailability = availability || null;
+    const models = availability?.llmModels || [];
+    const embeddingModels = availability?.embeddingModels || [];
+    const error = availability?.error;
+    if (ollamaSelect) {
+      ollamaSelect.disabled = false;
+      if (error) {
+        ollamaSelect.innerHTML = '<option value="">Failed to load models</option>';
+        if (ollamaEmbeddingSelect) {
+          ollamaEmbeddingSelect.disabled = false;
+          ollamaEmbeddingSelect.innerHTML = `<option value="${escapeHtml(DEFAULT_OLLAMA_EMBED_MODEL)}">${escapeHtml(DEFAULT_OLLAMA_EMBED_MODEL)} (recommended)</option><option value="">Use MiniLM fallback (default)</option>`;
+          ollamaEmbeddingSelect.value = DEFAULT_OLLAMA_EMBED_MODEL;
+        }
+        if (ollamaHint) {
+          ollamaHint.textContent = `${error}. Run Auto-setup or connect a running Ollama URL.`;
+        }
+        setOllamaLamp('fail', `Ollama unreachable at ${baseUrl}`);
+        syncOllamaSectionVisibility();
+        updateSaveButtonState();
+        return;
+      }
+      if (!models?.length) {
+        ollamaSelect.innerHTML = '<option value="">No chat models found</option>';
+        if (ollamaEmbeddingSelect) {
+          ollamaEmbeddingSelect.disabled = false;
+          const embedOptions = embeddingModels
+            .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name || m.id)}</option>`)
+            .join('');
+          ollamaEmbeddingSelect.innerHTML = `${embedOptions}<option value="">Use MiniLM fallback (default)</option>`;
+          ollamaEmbeddingSelect.value = embeddingModels.find((m) => m.id === DEFAULT_OLLAMA_EMBED_MODEL)?.id || DEFAULT_OLLAMA_EMBED_MODEL;
+        }
+        if (ollamaHint) {
+          const rec = (availability?.recommendedChatModels || []).join(', ') || DEFAULT_OLLAMA_CHAT_MODEL;
+          ollamaHint.textContent = `Ollama connected, but no chat model pulled. Recommended: ${rec}.`;
+        }
+        setOllamaLamp('ok', `Ollama reachable at ${baseUrl}`);
+        syncOllamaSectionVisibility();
+        updateSaveButtonState();
+        return;
+      }
+      ollamaSelect.innerHTML = models
+        .map((m) => {
+          const effective = toInt(m.effectiveContextLength) || toInt(m.maxContextLength);
+          const ctx = effective ? ` (${(effective / 1024).toFixed(0)}k ctx)` : '';
+          return `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}${escapeHtml(ctx)}</option>`;
+        })
+        .join('');
+      const preferredChatModel =
+        models.find((m) => m.id === DEFAULT_OLLAMA_CHAT_MODEL)?.id ||
+        models.find((m) => String(m.id || '').startsWith('qwen2.5'))?.id ||
+        String(models[0]?.id || '');
+      ollamaSelect.value = preferredChatModel;
+      if (ollamaEmbeddingSelect) {
+        ollamaEmbeddingSelect.disabled = false;
+        const embedOptions = embeddingModels
+          .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name || m.id)}</option>`)
+          .join('');
+        ollamaEmbeddingSelect.innerHTML = `${embedOptions}<option value="">Use MiniLM fallback (default)</option>`;
+        const preferredEmbedModel =
+          embeddingModels.find((m) => m.id === DEFAULT_OLLAMA_EMBED_MODEL)?.id ||
+          embeddingModels[0]?.id ||
+          '';
+        ollamaEmbeddingSelect.value = preferredEmbedModel || '';
+      }
+      if (ollamaHint) {
+        const embedText = embeddingModels.length
+          ? `Embedding models: ${embeddingModels.length}.`
+          : `Missing embedding model. Run Auto-setup to pull ${DEFAULT_OLLAMA_EMBED_MODEL}.`;
+        ollamaHint.textContent = `Chat models: ${models.length}. ${embedText}`;
+      }
+      setOllamaLamp('ok', `Ollama reachable at ${baseUrl}`);
+      wizardState.ollamaChecked = true;
+      syncOllamaSectionVisibility();
+      updateSaveButtonState();
+    }
+  }
+
+  async function runOllamaAutoSetup() {
+    if (wizardState.ollamaSetupRunning) return;
+    wizardState.ollamaSetupRunning = true;
+    syncOllamaSetupButtonVisibility();
+    if (ollamaHint) ollamaHint.textContent = 'Running auto-setup...';
+    const baseUrl = normalizeOllamaUrl(aiAddOllamaUrl?.value);
+    const chatModel = (ollamaSelect?.value || DEFAULT_OLLAMA_CHAT_MODEL).trim() || DEFAULT_OLLAMA_CHAT_MODEL;
+    const embeddingModel =
+      (ollamaEmbeddingSelect?.value || DEFAULT_OLLAMA_EMBED_MODEL).trim() || DEFAULT_OLLAMA_EMBED_MODEL;
+    try {
+      const result = await window.mdviewer?.startOllamaAutosetup?.({
+        baseUrl,
+        chatModel,
+        embeddingModel,
+      });
+      if (!result?.ok) {
+        throw new Error(result?.error || 'Auto-setup failed');
+      }
+      if (ollamaHint) ollamaHint.textContent = 'Auto-setup finished. Checking Ollama...';
+      await checkOllamaAvailability(baseUrl);
+    } catch (err) {
+      setOllamaLamp('fail', `Ollama setup failed at ${baseUrl}`);
+      if (ollamaHint) {
+        ollamaHint.textContent = `${err?.message || 'Setup failed'}. Try Auto-setup again or use manual install URL.`;
+      }
+    } finally {
+      wizardState.ollamaSetupRunning = false;
+      syncOllamaSetupButtonVisibility();
+      updateSaveButtonState();
+    }
+  }
+
   async function checkCloudModels(type) {
     const apiKey = aiAddApiKey?.value?.trim() || '';
     wizardState.checkedProvider = '';
@@ -1632,11 +1829,13 @@ function initAiSettings() {
 
   function switchAddModelUI(type) {
     const isLm = type === 'lmstudio';
+    const isOllama = type === 'ollama';
     const isCloud = ['openai', 'claude', 'google'].includes(type);
     lmstudioWrap?.classList.toggle('hidden', !isLm);
+    ollamaWrap?.classList.toggle('hidden', !isOllama);
     cloudWrap?.classList.toggle('hidden', !isCloud);
     aiAddApiKeyWrap?.classList.toggle('hidden', !isCloud);
-    manualWrap?.classList.toggle('hidden', isLm || isCloud);
+    manualWrap?.classList.toggle('hidden', isLm || isOllama || isCloud);
     if (aiAddModelId) aiAddModelId.placeholder = addPlaceholders[type] || 'Model ID';
     resetWizardChecks();
     if (cloudSelect && isCloud) {
@@ -1651,6 +1850,15 @@ function initAiSettings() {
       lmstudioEmbeddingSelect.disabled = true;
       lmstudioEmbeddingSelect.innerHTML = '<option value="">Use MiniLM fallback (default)</option>';
     }
+    if (ollamaSelect && isOllama) {
+      ollamaSelect.disabled = true;
+      ollamaSelect.innerHTML = '<option value="">Run check first</option>';
+    }
+    if (ollamaEmbeddingSelect && isOllama) {
+      ollamaEmbeddingSelect.disabled = true;
+      ollamaEmbeddingSelect.innerHTML = `<option value="${escapeHtml(DEFAULT_OLLAMA_EMBED_MODEL)}">${escapeHtml(DEFAULT_OLLAMA_EMBED_MODEL)} (recommended)</option><option value="">Use MiniLM fallback (default)</option>`;
+      ollamaEmbeddingSelect.value = DEFAULT_OLLAMA_EMBED_MODEL;
+    }
     if (isLm && aiAddLmstudioUrl) {
       aiAddLmstudioUrl.value = normalizeLmStudioUrl(
         aiApiKeys.lmstudio?.baseUrl ||
@@ -1663,6 +1871,20 @@ function initAiSettings() {
         checkLmStudioAvailability(aiAddLmstudioUrl.value);
       }
     }
+    if (isOllama && aiAddOllamaUrl) {
+      aiAddOllamaUrl.value = normalizeOllamaUrl(
+        aiApiKeys.ollama?.baseUrl ||
+        aiProviders.find((p) => p.type === 'ollama')?.baseUrl ||
+        DEFAULT_OLLAMA_URL
+      );
+      syncOllamaCustomCheckButtonVisibility();
+      setOllamaLamp('', 'Ollama status');
+      syncOllamaSectionVisibility();
+      checkOllamaAvailability(aiAddOllamaUrl.value);
+    } else {
+      setOllamaLamp('', 'Ollama status');
+      syncOllamaSectionVisibility();
+    }
     if (aiAddApiKey) {
       const keySlot = cloudKeyMap[type];
       aiAddApiKey.value = keySlot ? (aiApiKeys[keySlot]?.apiKey || '') : '';
@@ -1672,9 +1894,9 @@ function initAiSettings() {
 
   function openAddForm() {
     aiAddForm?.classList.remove('hidden');
-    aiAddType.value = 'lmstudio';
+    aiAddType.value = 'ollama';
     aiAddModelId.value = '';
-    switchAddModelUI('lmstudio');
+    switchAddModelUI('ollama');
     updateSaveButtonState();
   }
   aiAddType?.addEventListener('change', () => switchAddModelUI(aiAddType.value));
@@ -1682,6 +1904,8 @@ function initAiSettings() {
   cloudSelect?.addEventListener('change', updateSaveButtonState);
   lmstudioSelect?.addEventListener('change', updateSaveButtonState);
   lmstudioEmbeddingSelect?.addEventListener('change', updateSaveButtonState);
+  ollamaSelect?.addEventListener('change', updateSaveButtonState);
+  ollamaEmbeddingSelect?.addEventListener('change', updateSaveButtonState);
   aiAddLmstudioUrl?.addEventListener('input', () => {
     syncLmStudioCustomCheckButtonVisibility();
     setLmStudioLamp('', 'LM Studio status');
@@ -1693,6 +1917,18 @@ function initAiSettings() {
   });
   aiAddLmstudioCheckCustom?.addEventListener('click', () => {
     checkLmStudioAvailability(aiAddLmstudioUrl?.value);
+  });
+  aiAddOllamaUrl?.addEventListener('input', () => {
+    syncOllamaCustomCheckButtonVisibility();
+    setOllamaLamp('', 'Ollama status');
+    if (ollamaAutocheckTimer) clearTimeout(ollamaAutocheckTimer);
+    const current = normalizeOllamaUrl(aiAddOllamaUrl.value);
+    if (current === DEFAULT_OLLAMA_URL) {
+      ollamaAutocheckTimer = setTimeout(() => checkOllamaAvailability(current), 350);
+    }
+  });
+  aiAddOllamaAutosetup?.addEventListener('click', () => {
+    runOllamaAutoSetup();
   });
   aiAddApiKey?.addEventListener('input', () => {
     wizardState.checkedProvider = '';
@@ -1712,7 +1948,6 @@ function initAiSettings() {
 
   function closeAddForm() {
     aiAddForm?.classList.add('hidden');
-    aiModelSearch.value = '';
     resetWizardChecks();
     renderAiModelsList();
   }
@@ -1720,10 +1955,12 @@ function initAiSettings() {
     const type = aiAddType.value;
     let modelId = '';
     if (type === 'lmstudio') modelId = (lmstudioSelect?.value || '').trim();
+    else if (type === 'ollama') modelId = (ollamaSelect?.value || '').trim();
     else if (['openai', 'claude', 'google'].includes(type)) modelId = (cloudSelect?.value || '').trim();
     if (!modelId) modelId = aiAddModelId?.value?.trim() || '';
     if (!modelId) return;
     if (type === 'lmstudio' && !wizardState.lmstudioChecked) return;
+    if (type === 'ollama' && !wizardState.ollamaChecked) return;
     if (['openai', 'claude', 'google'].includes(type)) {
       const checked = wizardState.checkedProvider === type && wizardState.checkedModelType === 'cloud';
       if (!checked || !wizardState.verifiedApiKey) return;
@@ -1753,12 +1990,20 @@ function initAiSettings() {
       maxOutputTokens: null,
       maxOutputTokensUserSet: false,
       baseUrl: type === 'lmstudio' ? normalizeLmStudioUrl(aiAddLmstudioUrl?.value || keys.lmstudio?.baseUrl || DEFAULT_LMSTUDIO_URL) : undefined,
-      embeddingModel: type === 'lmstudio' ? ((lmstudioEmbeddingSelect?.value || '').trim()) : undefined,
+      embeddingModel:
+        type === 'lmstudio'
+          ? ((lmstudioEmbeddingSelect?.value || '').trim())
+          : type === 'ollama'
+            ? ((ollamaEmbeddingSelect?.value || '').trim())
+            : undefined,
       apiKey:
         type === 'openai' || type === 'claude' || type === 'google'
           ? wizardState.verifiedApiKey
           : '',
     };
+    if (type === 'ollama') {
+      provider.baseUrl = normalizeOllamaUrl(aiAddOllamaUrl?.value || keys.ollama?.baseUrl || DEFAULT_OLLAMA_URL);
+    }
     if (type === 'openai') aiApiKeys.openai = { apiKey: wizardState.verifiedApiKey };
     if (type === 'claude') aiApiKeys.anthropic = { apiKey: wizardState.verifiedApiKey };
     if (type === 'google') aiApiKeys.google = { apiKey: wizardState.verifiedApiKey };
@@ -1766,6 +2011,12 @@ function initAiSettings() {
       aiApiKeys.lmstudio = {
         ...(aiApiKeys.lmstudio || {}),
         baseUrl: provider.baseUrl || DEFAULT_LMSTUDIO_URL,
+      };
+    }
+    if (type === 'ollama') {
+      aiApiKeys.ollama = {
+        ...(aiApiKeys.ollama || {}),
+        baseUrl: provider.baseUrl || DEFAULT_OLLAMA_URL,
       };
     }
     aiProviders.push(provider);

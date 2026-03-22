@@ -1,5 +1,5 @@
 /**
- * LLM adapter - supports LM Studio, OpenAI, Claude, Google AI
+ * LLM adapter - supports LM Studio, Ollama, OpenAI, Claude, Google AI
  * All APIs called from main process to keep API keys secure
  * Uses Node http/https (not fetch) for reliable requests in Electron main process
  */
@@ -374,6 +374,53 @@ async function callLMStudioStream(provider, messages, contextDocuments, onChunk)
   );
 }
 
+async function callOllama(provider, messages, contextDocuments) {
+  const baseUrl = (provider.baseUrl || 'http://127.0.0.1:11434')
+    .replace(/\/$/, '')
+    .replace(/localhost/gi, '127.0.0.1');
+  const prepared = preparePromptContext(provider, messages, contextDocuments);
+  const body = {
+    model: provider.modelId || 'qwen2.5:7b',
+    messages: convertToOpenAIMessages(prepared.messages, prepared.systemPrompt),
+    max_tokens: prepared.maxOutputTokens,
+    temperature: 0.7,
+  };
+  const bodyStr = JSON.stringify(body);
+  const { ok, data } = await httpRequest(
+    `${baseUrl}/v1/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    },
+    bodyStr
+  );
+  if (!ok) throw new Error(data?.error?.message || data?.message || 'Request failed');
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function callOllamaStream(provider, messages, contextDocuments, onChunk) {
+  const baseUrl = (provider.baseUrl || 'http://127.0.0.1:11434')
+    .replace(/\/$/, '')
+    .replace(/localhost/gi, '127.0.0.1');
+  const prepared = preparePromptContext(provider, messages, contextDocuments);
+  const body = {
+    model: provider.modelId || 'qwen2.5:7b',
+    messages: convertToOpenAIMessages(prepared.messages, prepared.systemPrompt),
+    max_tokens: prepared.maxOutputTokens,
+    temperature: 0.7,
+    stream: true,
+  };
+  await httpStream(
+    `${baseUrl}/v1/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    },
+    JSON.stringify(body),
+    onChunk
+  );
+}
+
 async function callOpenAI(provider, messages, contextDocuments) {
   const prepared = preparePromptContext(provider, messages, contextDocuments);
   const body = {
@@ -493,6 +540,8 @@ async function chatCompletion(provider, messages, contextDocuments) {
   switch (provider.type) {
     case 'lmstudio':
       return callLMStudio(provider, messages, contextDocuments);
+    case 'ollama':
+      return callOllama(provider, messages, contextDocuments);
     case 'openai':
       return callOpenAI(provider, messages, contextDocuments);
     case 'claude':
@@ -508,6 +557,8 @@ async function chatCompletionStream(provider, messages, contextDocuments, onChun
   switch (provider.type) {
     case 'lmstudio':
       return callLMStudioStream(provider, messages, contextDocuments, onChunk);
+    case 'ollama':
+      return callOllamaStream(provider, messages, contextDocuments, onChunk);
     case 'openai':
       return callOpenAIStream(provider, messages, contextDocuments, onChunk);
     default:
@@ -532,6 +583,19 @@ function buildStreamRequest(provider, messages, contextDocuments) {
       stream: true,
     });
     return { url, options: { method: 'POST', headers: { 'Content-Type': 'application/json' } }, body };
+  }
+  if (provider.type === 'ollama') {
+    const baseUrl = (provider.baseUrl || 'http://127.0.0.1:11434')
+      .replace(/\/$/, '')
+      .replace(/localhost/gi, '127.0.0.1');
+    const body = JSON.stringify({
+      model: provider.modelId || 'qwen2.5:7b',
+      messages: messagesForApi,
+      max_tokens: prepared.maxOutputTokens,
+      temperature: 0.7,
+      stream: true,
+    });
+    return { url: `${baseUrl}/v1/chat/completions`, options: { method: 'POST', headers: { 'Content-Type': 'application/json' } }, body };
   }
   if (provider.type === 'openai') {
     const body = JSON.stringify({

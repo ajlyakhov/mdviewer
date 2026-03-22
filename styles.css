@@ -28,6 +28,7 @@ html[data-theme="dark"] {
 }
 
 * { box-sizing: border-box; }
+.hidden { display: none !important; }
 
 body {
   margin: 0;
@@ -591,6 +592,9 @@ html.theme-dark .back-btn:hover {
   overflow: hidden;
   background: var(--bg-secondary);
 }
+.ai-models-list:empty {
+  display: none;
+}
 .ai-model-row {
   display: flex;
   align-items: center;
@@ -689,6 +693,23 @@ html.theme-dark .back-btn:hover {
 .ai-add-model-wrap.hidden { display: none; }
 .ai-add-model-hint { font-size: 12px; color: var(--text-muted); margin: 6px 0 0 0; }
 .ai-add-model-wrap .btn { margin-top: 6px; }
+.ai-setup-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.ai-setup-actions .btn {
+  margin-top: 0;
+}
+.ai-setup-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+}
+.ai-setup-link:hover {
+  text-decoration: underline;
+}
 .ai-form-actions { display: flex; gap: 8px; margin-top: 16px; }
 .ai-lmstudio-url-row {
   display: flex;

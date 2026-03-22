@@ -59,6 +59,13 @@ function embeddingDescriptor(provider) {
       embeddingModel: p.model || DEFAULT_EMBEDDING_MODEL,
     };
   }
+  if (p.type === 'ollama') {
+    return {
+      embeddingBackend: 'ollama',
+      embeddingBackendLabel: 'Ollama',
+      embeddingModel: p.model || 'nomic-embed-text',
+    };
+  }
   return {
     embeddingBackend: 'minilm',
     embeddingBackendLabel: 'MiniLM',
@@ -639,10 +646,11 @@ class KnowledgebaseService {
         throw err;
       }
     }
-    if (effectiveProvider.type !== 'lmstudio') {
+    if (!['lmstudio', 'ollama'].includes(effectiveProvider.type)) {
       return embedWithMiniLM(cleanInputs);
     }
-    const root = String(effectiveProvider.baseUrl || 'http://127.0.0.1:1234')
+    const defaultRoot = effectiveProvider.type === 'ollama' ? 'http://127.0.0.1:11434' : 'http://127.0.0.1:1234';
+    const root = String(effectiveProvider.baseUrl || defaultRoot)
       .replace(/\/$/, '')
       .replace(/localhost/gi, '127.0.0.1');
     const url = root.endsWith('/v1') ? `${root}/embeddings` : `${root}/v1/embeddings`;
@@ -651,7 +659,7 @@ class KnowledgebaseService {
         url,
         { method: 'POST' },
         {
-          model: effectiveProvider.model || DEFAULT_EMBEDDING_MODEL,
+          model: effectiveProvider.model || (effectiveProvider.type === 'ollama' ? 'nomic-embed-text' : DEFAULT_EMBEDDING_MODEL),
           input: cleanInputs,
         }
       );
@@ -660,7 +668,7 @@ class KnowledgebaseService {
         .map((row) => row.embedding)
         .filter((vec) => Array.isArray(vec) && vec.length > 0);
       if (list.length !== cleanInputs.length) {
-        throw new Error('Embedding count mismatch from LM Studio.');
+        throw new Error(`Embedding count mismatch from ${effectiveProvider.type === 'ollama' ? 'Ollama' : 'LM Studio'}.`);
       }
       return list;
     } catch (err) {

@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const { chatCompletion: llmChatCompletion, buildStreamRequest } = require('./llm-adapter');
 const { Worker } = require('worker_threads');
 const { createKnowledgebaseService, DEFAULT_EMBEDDING_MODEL } = require('./knowledgebase/service');
@@ -488,6 +488,377 @@ function findDuti() {
   return null;
 }
 
+function normalizeLocalBaseUrl(url, fallback) {
+  const raw = String(url || '').trim();
+  return (raw || fallback).replace(/\/$/, '').replace(/localhost/gi, '127.0.0.1');
+}
+
+function lineChunks(raw) {
+  return String(raw || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function stripTerminalControl(input) {
+  const raw = String(input || '');
+  const withoutAnsi = raw.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\u001b[@-Z\\-_]/g, '');
+  return withoutAnsi
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+    .trim();
+}
+
+function unitToBytes(value, unit) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const key = String(unit || '').toUpperCase();
+  const multipliers = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 ** 2,
+    GB: 1024 ** 3,
+    TB: 1024 ** 4,
+  };
+  const m = multipliers[key];
+  if (!m) return null;
+  return Math.round(n * m);
+}
+
+function parseOllamaPullLine(rawLine) {
+  const line = stripTerminalControl(rawLine);
+  if (!line) return null;
+  const percentMatch = line.match(/(\d{1,3})%/);
+  if (percentMatch) {
+    const pct = Math.max(0, Math.min(100, Number(percentMatch[1]) || 0));
+    return { current: pct, total: 100, meta: line };
+  }
+  const bytesMatch = line.match(/(\d+(?:\.\d+)?)\s*([KMGT]?B)\s*\/\s*(\d+(?:\.\d+)?)\s*([KMGT]?B)/i);
+  if (bytesMatch) {
+    const current = unitToBytes(bytesMatch[1], bytesMatch[2]);
+    const total = unitToBytes(bytesMatch[3], bytesMatch[4]);
+    if (Number.isFinite(current) && Number.isFinite(total) && total > 0) {
+      return { current, total, meta: line };
+    }
+  }
+  return { meta: line };
+}
+
+function runCommandCapture(command, args = [], options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      ...options,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      resolve({ ok: false, code: -1, error: error?.message || String(error), stdout, stderr });
+    });
+    child.on('close', (code) => {
+      resolve({ ok: code === 0, code: Number(code) || 0, stdout, stderr });
+    });
+  });
+}
+
+function runCommandProgress(command, args = [], options = {}) {
+  const onLine = options.onLine;
+  const spawnOpts = { ...options };
+  delete spawnOpts.onLine;
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      ...spawnOpts,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      const text = chunk.toString('utf8');
+      stdout += text;
+      if (typeof onLine === 'function') {
+        const lines = text.split(/\r|\n/).map(stripTerminalControl).filter(Boolean);
+        for (const line of lines) onLine(line, 'stdout');
+      }
+    });
+    child.stderr?.on('data', (chunk) => {
+      const text = chunk.toString('utf8');
+      stderr += text;
+      if (typeof onLine === 'function') {
+        const lines = text.split(/\r|\n/).map(stripTerminalControl).filter(Boolean);
+        for (const line of lines) onLine(line, 'stderr');
+      }
+    });
+    child.on('error', (error) => {
+      resolve({ ok: false, code: -1, error: error?.message || String(error), stdout, stderr });
+    });
+    child.on('close', (code) => {
+      resolve({ ok: code === 0, code: Number(code) || 0, stdout, stderr });
+    });
+  });
+}
+
+async function commandExists(command) {
+  const checker = process.platform === 'win32' ? 'where' : 'which';
+  const res = await runCommandCapture(checker, [command], { shell: process.platform === 'win32' });
+  return Boolean(res.ok && String(res.stdout || '').trim());
+}
+
+function getOllamaCandidatePaths() {
+  if (process.platform === 'darwin') {
+    return [
+      '/opt/homebrew/bin/ollama',
+      '/usr/local/bin/ollama',
+      '/Applications/Ollama.app/Contents/Resources/ollama',
+    ];
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || '';
+    const programFiles = process.env['ProgramFiles'] || '';
+    return [
+      path.join(localAppData, 'Programs', 'Ollama', 'ollama.exe'),
+      path.join(programFiles, 'Ollama', 'ollama.exe'),
+      'ollama.exe',
+    ];
+  }
+  return ['/usr/local/bin/ollama', '/usr/bin/ollama', path.join(process.env.HOME || '', '.local', 'bin', 'ollama')];
+}
+
+async function resolveOllamaExecutable() {
+  for (const candidate of getOllamaCandidatePaths()) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  const has = await commandExists(process.platform === 'win32' ? 'ollama.exe' : 'ollama');
+  if (has) return process.platform === 'win32' ? 'ollama.exe' : 'ollama';
+  return null;
+}
+
+function parseOllamaTagsPayload(payload) {
+  const list = payload?.models ?? payload?.data ?? (Array.isArray(payload) ? payload : []);
+  const models = list
+    .map((m) => {
+      const id = m?.name || m?.model || m?.id;
+      if (!id) return null;
+      const details = m?.details || {};
+      const ctx = details?.context_length || details?.contextLength || null;
+      return {
+        id,
+        name: id,
+        maxContextLength: Number.isFinite(Number(ctx)) ? Number(ctx) : null,
+        effectiveContextLength: Number.isFinite(Number(ctx)) ? Number(ctx) : null,
+      };
+    })
+    .filter(Boolean);
+  const embeddingModels = models.filter((m) => /embed|embedding|nomic-embed|mxbai-embed/i.test(String(m.id || '')));
+  const llmModels = models.filter((m) => !/embed|embedding|nomic-embed|mxbai-embed/i.test(String(m.id || '')));
+  return {
+    llmModels,
+    embeddingModels,
+    hasLlm: llmModels.length > 0,
+    hasEmbedding: embeddingModels.length > 0,
+    recommendedChatModels: ['qwen2.5:7b', 'llama3.1:8b', 'mistral:7b'],
+    recommendedEmbeddingModels: ['nomic-embed-text', 'mxbai-embed-large'],
+  };
+}
+
+async function checkOllamaAvailability(baseUrl) {
+  try {
+    const url = normalizeLocalBaseUrl(baseUrl, 'http://127.0.0.1:11434');
+    const { ok, data, raw } = await httpGet(`${url}/api/tags`);
+    if (!ok || !data) return { ok: false, error: raw || data?.raw || 'Request failed' };
+    return { ok: true, ...parseOllamaTagsPayload(data) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+function sendOllamaSetupProgress(sender, payload = {}) {
+  sender?.send('ollama-setup-progress', {
+    message: payload.message || '',
+    meta: payload.meta || '',
+    current: Number(payload.current) || 0,
+    total: Number(payload.total) || null,
+    stage: payload.stage || '',
+  });
+}
+
+async function waitForOllama(baseUrl, timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const check = await checkOllamaAvailability(baseUrl);
+    if (check?.ok) return check;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return { ok: false, error: 'Ollama did not become ready in time.' };
+}
+
+async function ensureOllamaServerRunning(ollamaCmd, baseUrl) {
+  const probe = await checkOllamaAvailability(baseUrl);
+  if (probe?.ok) return probe;
+  if (!ollamaCmd) return { ok: false, error: 'Ollama executable not found.' };
+  const child = spawn(ollamaCmd, ['serve'], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  return waitForOllama(baseUrl, 25000);
+}
+
+async function installOllamaIfMissing() {
+  const existing = await resolveOllamaExecutable();
+  if (existing) return { ok: true, installed: false, ollamaCmd: existing };
+  if (process.platform === 'darwin') {
+    if (await commandExists('brew')) {
+      const installResult = await runCommandProgress('brew', ['install', 'ollama'], { shell: false });
+      if (!installResult.ok) return { ok: false, error: installResult.stderr || installResult.stdout || 'brew install failed' };
+    } else {
+      const installResult = await runCommandProgress('/bin/bash', ['-lc', 'curl -fsSL https://ollama.com/install.sh | sh']);
+      if (!installResult.ok) return { ok: false, error: installResult.stderr || installResult.stdout || 'Ollama install script failed' };
+    }
+  } else if (process.platform === 'linux') {
+    const scriptCmd = 'curl -fsSL https://ollama.com/install.sh | sh';
+    let installResult = await runCommandProgress('/bin/bash', ['-lc', scriptCmd]);
+    if (!installResult.ok) {
+      installResult = await runCommandProgress('/bin/bash', ['-lc', 'curl -fsSL https://ollama.com/install.sh | sudo -n sh']);
+    }
+    if (!installResult.ok && await commandExists('pkexec')) {
+      installResult = await runCommandProgress('/bin/bash', ['-lc', "pkexec sh -c \"curl -fsSL https://ollama.com/install.sh | sh\""]);
+    }
+    if (!installResult.ok) {
+      return {
+        ok: false,
+        error:
+          (installResult.stderr || installResult.stdout || 'Ollama install script failed') +
+          '\nTry manually: curl -fsSL https://ollama.com/install.sh | sh',
+      };
+    }
+  } else if (process.platform === 'win32') {
+    const psScript =
+      "$temp=Join-Path $env:TEMP 'OllamaSetup.exe';" +
+      "Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $temp;" +
+      "Start-Process -FilePath $temp -ArgumentList '/VERYSILENT','/NORESTART' -Verb RunAs -Wait;";
+    const installResult = await runCommandProgress('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+      shell: true,
+    });
+    if (!installResult.ok) {
+      return {
+        ok: false,
+        error:
+          (installResult.stderr || installResult.stdout || 'Windows installer failed') +
+          '\nTry manual install: https://ollama.com/download',
+      };
+    }
+  } else {
+    return { ok: false, error: `Unsupported OS: ${process.platform}` };
+  }
+  const resolved = await resolveOllamaExecutable();
+  if (!resolved) return { ok: false, error: 'Ollama installation finished but executable was not found in PATH.' };
+  return { ok: true, installed: true, ollamaCmd: resolved };
+}
+
+async function removePathIfExists(targetPath) {
+  if (!targetPath) return { ok: true };
+  try {
+    if (!fs.existsSync(targetPath)) return { ok: true };
+    await fs.promises.rm(targetPath, { recursive: true, force: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+async function tryPrivilegedRm(targets = []) {
+  const quoted = targets
+    .filter(Boolean)
+    .map((p) => `"${String(p).replace(/"/g, '\\"')}"`)
+    .join(' ');
+  if (!quoted) return { ok: true };
+  const sudoTry = await runCommandProgress('/bin/bash', ['-lc', `sudo -n rm -rf ${quoted}`]);
+  if (sudoTry.ok) return { ok: true };
+  if (await commandExists('pkexec')) {
+    const pkexecTry = await runCommandProgress('/bin/bash', ['-lc', `pkexec rm -rf ${quoted}`]);
+    if (pkexecTry.ok) return { ok: true };
+    return { ok: false, error: pkexecTry.stderr || pkexecTry.stdout || 'Privileged cleanup failed' };
+  }
+  return { ok: false, error: sudoTry.stderr || sudoTry.stdout || 'Privileged cleanup failed' };
+}
+
+async function uninstallOllama(args = {}, sender) {
+  const baseUrl = normalizeLocalBaseUrl(args.baseUrl, 'http://127.0.0.1:11434');
+  const progress = (current, total, message, meta = '') =>
+    sendOllamaSetupProgress(sender, { stage: 'uninstall', current, total, message, meta });
+
+  progress(1, 5, 'Stopping Ollama service', 'Cleaning running processes...');
+  if (process.platform === 'win32') {
+    await runCommandCapture('taskkill', ['/F', '/IM', 'ollama.exe'], { shell: true });
+  } else {
+    await runCommandCapture('/bin/bash', ['-lc', 'pkill -f "[/]ollama" || true']);
+  }
+
+  progress(2, 5, 'Removing Ollama models data', 'Deleting local model cache...');
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const userTargets = process.platform === 'win32'
+    ? [path.join(home, '.ollama'), path.join(localAppData, 'Ollama')]
+    : [path.join(home, '.ollama')];
+  for (const t of userTargets) await removePathIfExists(t);
+
+  progress(3, 5, 'Removing executable files', 'Deleting app binaries...');
+  if (process.platform === 'darwin') {
+    if (await commandExists('brew')) await runCommandCapture('brew', ['uninstall', 'ollama']);
+    await removePathIfExists('/Applications/Ollama.app');
+    await removePathIfExists('/opt/homebrew/bin/ollama');
+    await removePathIfExists('/usr/local/bin/ollama');
+  } else if (process.platform === 'linux') {
+    const direct = [
+      '/usr/local/bin/ollama',
+      '/usr/bin/ollama',
+      '/usr/share/ollama',
+      '/var/lib/ollama',
+      '/etc/systemd/system/ollama.service',
+      '/lib/systemd/system/ollama.service',
+    ];
+    const failed = [];
+    for (const t of direct) {
+      const res = await removePathIfExists(t);
+      if (!res.ok && fs.existsSync(t)) failed.push(t);
+    }
+    if (failed.length) await tryPrivilegedRm(failed);
+  } else if (process.platform === 'win32') {
+    const installDir = path.join(localAppData, 'Programs', 'Ollama');
+    const uninstallExe = path.join(installDir, 'Uninstall Ollama.exe');
+    if (fs.existsSync(uninstallExe)) {
+      await runCommandCapture('powershell', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Start-Process -FilePath '${uninstallExe.replace(/'/g, "''")}' -ArgumentList '/SILENT' -Verb RunAs -Wait`,
+      ], { shell: true });
+    }
+    await removePathIfExists(installDir);
+  }
+
+  progress(4, 5, 'Finalizing cleanup', 'Verifying Ollama endpoint is offline...');
+  const check = await checkOllamaAvailability(baseUrl);
+  if (check?.ok) {
+    return {
+      ok: false,
+      error: 'Ollama endpoint is still reachable after uninstall. Stop any external Ollama instance and retry.',
+    };
+  }
+
+  progress(5, 5, 'Uninstall complete', 'Ollama and local data were removed.');
+  return { ok: true };
+}
+
 ipcMain.handle('set-default-md-app', async () => {
   if (process.platform !== 'darwin') {
     return { ok: false, error: 'Only supported on macOS' };
@@ -552,8 +923,10 @@ async function resolveKnowledgebaseEmbeddingProviderConfig() {
   const topK = Number(kb.topK) > 0 ? Number(kb.topK) : 12;
   const maxPerDocument = Number(kb.maxPerDocument) > 0 ? Number(kb.maxPerDocument) : 3;
   const lmProvider = providers.find((p) => p.type === 'lmstudio' && p.enabled !== false);
+  const ollamaProvider = providers.find((p) => p.type === 'ollama' && p.enabled !== false);
   const openAiProvider = providers.find((p) => p.type === 'openai' && p.enabled !== false);
   const lmConfigured = Boolean(lmProvider);
+  const ollamaConfigured = Boolean(ollamaProvider);
   const openAiConfigured = Boolean(openAiProvider);
   const openAiApiKey = openAiConfigured ? (openAiProvider?.apiKey || apiKeys.openai?.apiKey || '') : '';
 
@@ -598,6 +971,39 @@ async function resolveKnowledgebaseEmbeddingProviderConfig() {
         backend: 'minilm',
         label: 'MiniLM (fallback)',
         detail: 'LM Studio is configured but no embedding model is loaded.',
+      },
+    };
+  }
+
+  if (ollamaConfigured) {
+    const baseUrl = ollamaProvider?.baseUrl || apiKeys.ollama?.baseUrl || 'http://127.0.0.1:11434';
+    const selectedEmbeddingModel = String(ollamaProvider?.embeddingModel || '').trim() || 'nomic-embed-text';
+    const availableModel = await resolveOllamaEmbeddingModel(baseUrl, selectedEmbeddingModel);
+    if (availableModel) {
+      return {
+        provider: {
+          type: 'ollama',
+          baseUrl,
+          model: availableModel,
+          allowMiniLmFallback: true,
+        },
+        topK,
+        maxPerDocument,
+        status: {
+          backend: 'ollama',
+          label: `Ollama (${availableModel})`,
+          detail: `Using Ollama embeddings at ${baseUrl}`,
+        },
+      };
+    }
+    return {
+      provider: { type: 'minilm' },
+      topK,
+      maxPerDocument,
+      status: {
+        backend: 'minilm',
+        label: 'MiniLM (fallback)',
+        detail: 'Ollama is configured but embedding model is unavailable.',
       },
     };
   }
@@ -653,6 +1059,24 @@ async function resolveLmStudioEmbeddingModel(baseUrl, preferredModel) {
     }
     const first = embeddingModels[0];
     return first.key ?? first.id ?? first.name ?? first.model ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function resolveOllamaEmbeddingModel(baseUrl, preferredModel) {
+  try {
+    const check = await checkOllamaAvailability(baseUrl);
+    if (!check?.ok) return null;
+    const embeddingModels = check.embeddingModels || [];
+    if (!embeddingModels.length) return null;
+    const preferred = String(preferredModel || '').trim();
+    if (preferred) {
+      const found = embeddingModels.find((m) => m.id === preferred);
+      if (!found) return null;
+      return found.id;
+    }
+    return embeddingModels[0]?.id || null;
   } catch (_) {
     return null;
   }
@@ -826,6 +1250,7 @@ ipcMain.handle('chat-completion', async (_, { providerId, messages, contextDocum
   const merged = { ...provider };
   const keyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
   if (provider.type === 'lmstudio') merged.baseUrl = provider.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
+  else if (provider.type === 'ollama') merged.baseUrl = provider.baseUrl || apiKeys.ollama?.baseUrl || 'http://127.0.0.1:11434';
   else merged.apiKey = provider.apiKey || apiKeys[keyMap[provider.type]]?.apiKey || '';
   if (contextWindow) {
     merged.maxContextLength = contextWindow.maxContextLength ?? merged.maxContextLength;
@@ -849,6 +1274,7 @@ ipcMain.handle('chat-completion-stream', async (event, { providerId, messages, c
   const merged = { ...provider };
   const keyMap = { openai: 'openai', claude: 'anthropic', google: 'google' };
   if (provider.type === 'lmstudio') merged.baseUrl = provider.baseUrl || apiKeys.lmstudio?.baseUrl || 'http://127.0.0.1:1234';
+  else if (provider.type === 'ollama') merged.baseUrl = provider.baseUrl || apiKeys.ollama?.baseUrl || 'http://127.0.0.1:11434';
   else merged.apiKey = provider.apiKey || apiKeys[keyMap[provider.type]]?.apiKey || '';
   if (contextWindow) {
     merged.maxContextLength = contextWindow.maxContextLength ?? merged.maxContextLength;
@@ -1014,6 +1440,148 @@ ipcMain.handle('check-lmstudio-availability', async (_, baseUrl) => {
     };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('fetch-ollama-models', async (_, baseUrl) => {
+  const status = await checkOllamaAvailability(baseUrl);
+  if (!status?.ok) return { models: [], embeddingModels: [], error: status?.error || 'Request failed' };
+  return { models: status.llmModels || [], embeddingModels: status.embeddingModels || [] };
+});
+
+ipcMain.handle('check-ollama-availability', async (_, baseUrl) => {
+  return checkOllamaAvailability(baseUrl);
+});
+
+ipcMain.handle('uninstall-ollama', async (event, args = {}) => {
+  const sender = event.sender;
+  const finish = (payload) => {
+    sender?.send('ollama-setup-done', payload);
+    return payload;
+  };
+  try {
+    const result = await uninstallOllama(args, sender);
+    if (!result?.ok) return finish({ ok: false, message: 'Ollama uninstall failed', error: result?.error || 'Uninstall failed' });
+    return finish({ ok: true, message: 'Ollama uninstalled' });
+  } catch (err) {
+    return finish({ ok: false, message: 'Ollama uninstall failed', error: err?.message || String(err) });
+  }
+});
+
+ipcMain.handle('start-ollama-autosetup', async (event, args = {}) => {
+  const sender = event.sender;
+  const baseUrl = normalizeLocalBaseUrl(args.baseUrl, 'http://127.0.0.1:11434');
+  const chatModel = String(args.chatModel || 'qwen2.5:7b').trim() || 'qwen2.5:7b';
+  const embeddingModel = String(args.embeddingModel || 'nomic-embed-text').trim() || 'nomic-embed-text';
+  const totalStages = 5;
+  const finish = (payload) => {
+    sender?.send('ollama-setup-done', payload);
+    return payload;
+  };
+  try {
+    sendOllamaSetupProgress(sender, {
+      stage: 'install',
+      current: 1,
+      total: totalStages,
+      message: 'Installing Ollama',
+      meta: 'Detecting local installation...',
+    });
+    const installed = await installOllamaIfMissing();
+    if (!installed?.ok) return finish({ ok: false, error: installed?.error || 'Ollama install failed', message: 'Install failed' });
+    const ollamaCmd = installed.ollamaCmd;
+    sendOllamaSetupProgress(sender, {
+      stage: 'server',
+      current: 2,
+      total: totalStages,
+      message: 'Starting Ollama service',
+      meta: installed.installed ? 'Installation complete. Starting service...' : 'Ollama already installed. Starting service...',
+    });
+    const started = await ensureOllamaServerRunning(ollamaCmd, baseUrl);
+    if (!started?.ok) {
+      return finish({
+        ok: false,
+        error: started?.error || 'Failed to start Ollama service',
+        message: 'Service startup failed',
+      });
+    }
+    sendOllamaSetupProgress(sender, {
+      stage: 'pull-chat',
+      current: 3,
+      total: totalStages,
+      message: `Downloading ${chatModel}`,
+      meta: 'This can take a while depending on your network.',
+    });
+    const chatPull = await runCommandProgress(ollamaCmd, ['pull', chatModel], {
+      shell: process.platform === 'win32',
+      onLine: (line) => {
+        const parsed = parseOllamaPullLine(line) || {};
+        sendOllamaSetupProgress(sender, {
+          stage: 'pull-chat',
+          current: parsed.current,
+          total: parsed.total,
+          message: `Downloading ${chatModel}`,
+          meta: parsed.meta || line,
+        });
+      },
+    });
+    if (!chatPull?.ok) {
+      return finish({
+        ok: false,
+        error: chatPull?.stderr || chatPull?.stdout || `Failed to pull ${chatModel}`,
+        message: 'Chat model download failed',
+      });
+    }
+    sendOllamaSetupProgress(sender, {
+      stage: 'pull-embedding',
+      current: 4,
+      total: totalStages,
+      message: `Downloading ${embeddingModel}`,
+      meta: 'Preparing embedding model...',
+    });
+    const embPull = await runCommandProgress(ollamaCmd, ['pull', embeddingModel], {
+      shell: process.platform === 'win32',
+      onLine: (line) => {
+        const parsed = parseOllamaPullLine(line) || {};
+        sendOllamaSetupProgress(sender, {
+          stage: 'pull-embedding',
+          current: parsed.current,
+          total: parsed.total,
+          message: `Downloading ${embeddingModel}`,
+          meta: parsed.meta || line,
+        });
+      },
+    });
+    if (!embPull?.ok) {
+      return finish({
+        ok: false,
+        error: embPull?.stderr || embPull?.stdout || `Failed to pull ${embeddingModel}`,
+        message: 'Embedding model download failed',
+      });
+    }
+    sendOllamaSetupProgress(sender, {
+      stage: 'verify',
+      current: 5,
+      total: totalStages,
+      message: 'Verifying Ollama and models',
+      meta: 'Running health check...',
+    });
+    const finalCheck = await checkOllamaAvailability(baseUrl);
+    if (!finalCheck?.ok) {
+      return finish({
+        ok: false,
+        error: finalCheck?.error || 'Ollama verification failed',
+        message: 'Verification failed',
+      });
+    }
+    return finish({
+      ok: true,
+      message: 'Ollama setup complete',
+      baseUrl,
+      llmModels: finalCheck.llmModels || [],
+      embeddingModels: finalCheck.embeddingModels || [],
+    });
+  } catch (err) {
+    return finish({ ok: false, error: err?.message || String(err), message: 'Auto-setup failed' });
   }
 });
 

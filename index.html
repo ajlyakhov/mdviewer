@@ -86,13 +86,7 @@
                   <div class="ai-section ai-models-section">
                     <h3 class="ai-section-title">Model selection</h3>
                     <div class="ai-search-row">
-                      <input type="text" id="ai-model-search" class="ai-search-input" placeholder="Add or search model" autocomplete="off">
-                      <button type="button" class="ai-refresh-btn ai-add-btn" id="ai-add-model-btn" title="Add model">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-                      </button>
-                      <button type="button" class="ai-refresh-btn" id="ai-refresh-models" title="Refresh">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4v5h5M20 20v-5h-5M4 12a8 8 0 0114.5-4M20 12a8 8 0 01-14.5 4"/></svg>
-                      </button>
+                      <button type="button" class="btn btn-primary" id="ai-add-model-btn">Add model</button>
                     </div>
                     <div id="ai-models-list" class="ai-models-list"></div>
                   </div>
@@ -101,6 +95,7 @@
                   <div class="ai-add-form-inner">
                     <h4 class="ai-add-form-title">Add model</h4>
                     <select id="ai-add-type" class="theme-select">
+                      <option value="ollama">Ollama (auto setup)</option>
                       <option value="lmstudio">LM Studio</option>
                       <option value="openai">OpenAI</option>
                       <option value="claude">Claude</option>
@@ -122,6 +117,27 @@
                         <option value="">Use MiniLM fallback (default)</option>
                       </select>
                       <p class="ai-add-model-hint" id="ai-add-lmstudio-hint"></p>
+                    </div>
+                    <div id="ai-add-ollama-wrap" class="ai-add-model-wrap hidden">
+                      <div class="ai-setup-actions">
+                        <button type="button" class="btn btn-primary" id="ai-add-ollama-autosetup">Auto-setup</button>
+                      </div>
+                      <div id="ai-add-ollama-details" class="hidden">
+                        <label class="settings-hint">Ollama URL</label>
+                        <div class="ai-lmstudio-url-row">
+                          <input type="text" id="ai-add-ollama-url" class="theme-select" value="http://127.0.0.1:11434" placeholder="http://127.0.0.1:11434">
+                          <span class="ai-status-lamp" id="ai-add-ollama-lamp" aria-label="Ollama status" title="Checking Ollama"></span>
+                        </div>
+                        <label class="settings-hint">Model for responses</label>
+                        <select id="ai-add-ollama-model" class="theme-select" disabled>
+                          <option value="">Run check first</option>
+                        </select>
+                        <label class="settings-hint">Model for embeddings</label>
+                        <select id="ai-add-ollama-embedding-model" class="theme-select" disabled>
+                          <option value="">nomic-embed-text (recommended)</option>
+                        </select>
+                        <p class="ai-add-model-hint" id="ai-add-ollama-hint"></p>
+                      </div>
                     </div>
                     <div id="ai-add-api-key-wrap" class="ai-add-model-wrap hidden">
                       <input type="password" id="ai-add-api-key" class="theme-select" placeholder="API Key">
