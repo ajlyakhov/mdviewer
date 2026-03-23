@@ -48,17 +48,32 @@ jobs:
         run: |
           node -e "const fs=require('fs'); const files=['package.json','package-lock.json']; for (const file of files) { if (!fs.existsSync(file)) continue; const pkg=JSON.parse(fs.readFileSync(file,'utf8')); pkg.version=process.env.RELEASE_VERSION; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n'); }"
 
+      - name: Set up signing environment
+        shell: bash
+        env:
+          MAC_CERTS_RAW: ${{ secrets.MAC_CERTS }}
+          MAC_CERTS_PASSWORD_RAW: ${{ secrets.MAC_CERTS_PASSWORD }}
+          WIN_CERTS_RAW: ${{ secrets.WIN_CERTS }}
+          WIN_CERTS_PASSWORD_RAW: ${{ secrets.WIN_CERTS_PASSWORD }}
+        run: |
+          # Only inject signing vars when the secret is actually set —
+          # passing an empty string makes electron-builder treat it as a path and fail.
+          if [ -n "$MAC_CERTS_RAW" ]; then
+            echo "CSC_LINK=$MAC_CERTS_RAW" >> $GITHUB_ENV
+            echo "CSC_KEY_PASSWORD=$MAC_CERTS_PASSWORD_RAW" >> $GITHUB_ENV
+          fi
+          if [ -n "$WIN_CERTS_RAW" ]; then
+            echo "WIN_CSC_LINK=$WIN_CERTS_RAW" >> $GITHUB_ENV
+            echo "WIN_CSC_KEY_PASSWORD=$WIN_CERTS_PASSWORD_RAW" >> $GITHUB_ENV
+          fi
+
       - name: Build binaries
         env:
-          # macOS signing & notarization (set these secrets in repo Settings → Secrets)
-          CSC_LINK: ${{ secrets.MAC_CERTS }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+          # Disable keychain auto-discovery; signing only happens when CSC_LINK is set above
+          CSC_IDENTITY_AUTO_DISCOVERY: false
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows signing (set these secrets in repo Settings → Secrets)
-          WIN_CSC_LINK: ${{ secrets.WIN_CERTS }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTS_PASSWORD }}
         run: npm run dist -- ${{ matrix.build_flag }} --publish never
 
       - name: Upload build artifacts
