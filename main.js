@@ -1025,13 +1025,37 @@ async function ensureOllamaServerRunning(ollamaCmd, baseUrl) {
   return waitForOllama(baseUrl, 25000);
 }
 
-async function installOllamaIfMissing() {
+async function installOllamaIfMissing(opts = {}) {
+  const { sender } = opts;
   const existing = await resolveOllamaExecutable();
   if (existing) return { ok: true, installed: false, ollamaCmd: existing };
   if (process.platform === 'darwin') {
     if (await commandExists('brew')) {
-      const installResult = await runCommandProgress('brew', ['install', 'ollama'], { shell: false });
-      if (!installResult.ok) return { ok: false, error: installResult.stderr || installResult.stdout || 'brew install failed' };
+      // Forward meaningful brew output lines to the UI; skip raw download progress bars
+      const brewOnLine = sender
+        ? (line) => {
+            // Skip lines that are purely download-progress noise (sequences of # chars, percentages, sizes)
+            if (/^[#=\->\s%\d.,kKmMgGbBiI/]+$/.test(line.trim())) return;
+            sendOllamaSetupProgress(sender, {
+              stage: 'install',
+              message: 'Installing Ollama',
+              meta: line.slice(0, 140),
+            });
+          }
+        : undefined;
+      const installResult = await runCommandProgress('brew', ['install', 'ollama'], {
+        shell: false,
+        onLine: brewOnLine,
+      });
+      if (!installResult.ok) {
+        // brew sometimes exits non-zero even on a successful install (cask link warnings, etc.)
+        // Check whether the binary is actually present before giving up.
+        const resolvedAfterBrew = await resolveOllamaExecutable();
+        if (!resolvedAfterBrew) {
+          return { ok: false, error: installResult.stderr || installResult.stdout || 'brew install ollama failed' };
+        }
+        // Binary is present — treat the install as successful despite the non-zero exit
+      }
     } else {
       const installResult = await runCommandProgress('/bin/bash', ['-lc', 'curl -fsSL https://ollama.com/install.sh | sh']);
       if (!installResult.ok) return { ok: false, error: installResult.stderr || installResult.stdout || 'Ollama install script failed' };
@@ -1916,7 +1940,7 @@ ipcMain.handle('start-ollama-autosetup', async (event, args = {}) => {
       message: 'Installing Ollama',
       meta: 'Detecting local installation...',
     });
-    const installed = await installOllamaIfMissing();
+    const installed = await installOllamaIfMissing({ sender });
     if (!installed?.ok) return finish({ ok: false, error: installed?.error || 'Ollama install failed', message: 'Install failed' });
     const ollamaCmd = installed.ollamaCmd;
     sendOllamaSetupProgress(sender, {

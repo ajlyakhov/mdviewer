@@ -16,7 +16,8 @@
   "devDependencies": {
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
-    "sharp": "^0.33.5"
+    "sharp": "^0.33.5",
+    "@electron/notarize": "^2.3.0"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
@@ -50,10 +51,15 @@
         "dmg",
         "zip"
       ],
-      "icon": "assets/icon.icns"
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist"
     },
     "dmg": {
       "title": "${productName} ${version}"
-    }
+    },
+    "afterSign": "scripts/notarize.js"
   }
 }

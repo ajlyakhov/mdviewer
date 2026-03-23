@@ -16,9 +16,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            build_flag: --mac
-            artifact_name: macos-binaries
+          - os: macos-14
+            build_flag: --mac --arm64
+            artifact_name: macos-arm64-binaries
+          - os: macos-13
+            build_flag: --mac --x64
+            artifact_name: macos-x64-binaries
           - os: windows-latest
             build_flag: --win
             artifact_name: windows-binaries
@@ -46,6 +49,16 @@ jobs:
           node -e "const fs=require('fs'); const files=['package.json','package-lock.json']; for (const file of files) { if (!fs.existsSync(file)) continue; const pkg=JSON.parse(fs.readFileSync(file,'utf8')); pkg.version=process.env.RELEASE_VERSION; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n'); }"
 
       - name: Build binaries
+        env:
+          # macOS signing & notarization (set these secrets in repo Settings → Secrets)
+          CSC_LINK: ${{ secrets.MAC_CERTS }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows signing (set these secrets in repo Settings → Secrets)
+          WIN_CSC_LINK: ${{ secrets.WIN_CERTS }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTS_PASSWORD }}
         run: npm run dist -- ${{ matrix.build_flag }} --publish never
 
       - name: Upload build artifacts
