@@ -19,7 +19,7 @@ jobs:
           - os: macos-14
             build_flag: --mac --arm64
             artifact_name: macos-arm64-binaries
-          - os: macos-13
+          - os: macos-14
             build_flag: --mac --x64
             artifact_name: macos-x64-binaries
           - os: windows-latest
@@ -95,6 +95,8 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
+    # Publish as long as no job hard-failed — cancelled/skipped jobs are OK
+    if: ${{ always() && !contains(needs.build.result, 'failure') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
