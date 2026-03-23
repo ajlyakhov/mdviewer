@@ -2,6 +2,28 @@
 
 MD Viewer is an AI-first, local-first markdown copilot for macOS: open docs, inspect diagrams/code, and chat with an LLM that is optimized to prioritize your latest question.
 
+## Installation
+
+Download the latest release from the [Releases page](https://github.com/ajlyakhov/mdviewer/releases).
+
+### macOS
+
+> **"App is damaged and can't be opened"?**
+>
+> The app is not yet code-signed. macOS Gatekeeper blocks unsigned apps downloaded from the internet.
+> Run this once in Terminal after moving the app to `/Applications`:
+> ```bash
+> xattr -cr /Applications/MD\ Viewer.app
+> ```
+> Then open it normally. This removes the quarantine flag — it's safe, and a common step for open-source apps.
+
+### Windows
+
+> **SmartScreen warning?**
+>
+> Click **More info → Run anyway**. The app is not yet code-signed, so Windows SmartScreen flags it as unknown.
+> This will improve once the app builds download reputation over time.
+
 ## Objective
 
 MD Viewer is no longer just a markdown renderer. The core goal is reliable AI-assisted reasoning over local markdown context with predictable behavior in long chats:
