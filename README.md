@@ -151,6 +151,33 @@ npm run build
 
 Produces DMG and ZIP in `dist/`.
 
+## Privacy Policy
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+
+When you configure an AI provider (OpenAI, Anthropic Claude, Google Gemini, LM Studio, or Ollama), chat messages and document context are sent to that provider's API according to their own privacy policies. All provider configuration is done explicitly by the user. No data is collected or transmitted by MD Viewer itself.
+
+## Uninstallation
+
+**macOS:** Drag `MD Viewer.app` from `/Applications` to the Trash. To also remove app data:
+```bash
+rm -rf ~/Library/Application\ Support/mdviewer
+```
+
+**Windows:** Use *Add or Remove Programs* → search for *MD Viewer* → Uninstall.
+
+## Code Signing Policy
+
+Free code signing for Windows is provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+| Role | Members |
+|---|---|
+| Author & Approver | [@ajlyakhov](https://github.com/ajlyakhov) |
+| Reviewers | [Contributors](https://github.com/ajlyakhov/mdviewer/graphs/contributors) |
+
+All releases are built via automated CI (GitHub Actions) directly from this repository. Signing is triggered manually per release by the project owner.
+
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
