@@ -40,6 +40,8 @@ MD Viewer is no longer just a markdown renderer. The core goal is reliable AI-as
 - Structured memory summarization for older turns
 - Adaptive output token budgeting per request
 - Prompt-budget debug telemetry for troubleshooting
+- **Voice input** — mic button in chat for quick speech-to-text (Web Speech API)
+- **Voice conversation mode** — full-screen overlay with live audio waveform, karaoke-style subtitles, and looping AI dialogue; conversations committed to chat on close
 - Drag & drop files or folders (recursive)
 - Drag & drop PDF files for automatic PDF -> Markdown import
 - Open files via menu (File → Open File / Open Folder)
@@ -53,6 +55,16 @@ MD Viewer is no longer just a markdown renderer. The core goal is reliable AI-as
 - Local images (relative paths resolve to file, e.g. `![](assets/banner.webp)`)
 - Themes: Light, Dark, System
 - Syntax highlighting for code blocks
+
+## Voice
+
+MD Viewer has two voice input modes:
+
+**Mic button** (quick dictation): In the chat input row, click the mic icon to start recording. Words appear in the textarea live as you speak. Click again or pause to stop.
+
+**Voice conversation mode**: Click the **Voice** button in the model row to open a full-screen voice experience — real-time audio waveform, karaoke subtitles (your words on the right, AI responses on the left), and an automatic speak → respond → listen loop. Close with × or Escape; the whole conversation lands in your active chat session.
+
+See [voice.md](voice.md) for full technical documentation, architecture, and platform support notes.
 
 ## Knowledgebase Embedding Logic
 

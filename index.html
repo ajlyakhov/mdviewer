@@ -240,6 +240,15 @@
                   <button type="button" class="chat-sessions-trigger" id="chat-sessions-trigger" title="Sessions">Sessions ▾</button>
                   <div class="chat-sessions-menu hidden" id="chat-sessions-menu"></div>
                 </div>
+                <button type="button" id="ai-voice-btn" class="ai-voice-btn" title="Voice conversation mode">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+                    <line x1="12" y1="18" x2="12" y2="22"/>
+                    <line x1="8" y1="22" x2="16" y2="22"/>
+                  </svg>
+                  Voice
+                </button>
               </div>
             </div>
           </div>
@@ -275,6 +284,22 @@
       <div class="ollama-remove-footer">
         <button type="button" class="btn" id="ollama-remove-cancel">Cancel</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Voice Overlay -->
+  <div id="voice-overlay" class="voice-overlay hidden" role="dialog" aria-label="Voice conversation mode">
+    <button id="voice-overlay-close" class="voice-overlay-close" aria-label="Close voice mode">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+    <div class="voice-overlay-inner">
+      <div class="voice-waveform-wrap">
+        <div class="voice-waveform" id="voice-waveform"></div>
+      </div>
+      <div class="voice-status" id="voice-status">Listening...</div>
+      <div class="voice-subtitles" id="voice-subtitles"></div>
     </div>
   </div>
 

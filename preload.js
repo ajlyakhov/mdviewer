@@ -54,6 +54,9 @@ contextBridge.exposeInMainWorld('mdviewer', {
   kbImportFolderDialog: () => ipcRenderer.invoke('kb-import-folder-dialog'),
   kbClearAll: () => ipcRenderer.invoke('kb-clear-all'),
   onKbImportProgress: (cb) => ipcRenderer.on('kb-import-progress', (_, payload) => cb(payload)),
+  whisperGetStatus: () => ipcRenderer.invoke('whisper-get-status'),
+  whisperTranscribe: (args) => ipcRenderer.invoke('whisper-transcribe', args),
+  onWhisperProgress: (cb) => ipcRenderer.on('whisper-progress', (_, p) => cb(p)),
   getPathForFile: (file) => {
     if (!file) return '';
     try {

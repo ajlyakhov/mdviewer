@@ -2934,6 +2934,8 @@ function setVoiceSttMode(mode) {
   localStorage.setItem(VOICE_STT_KEY, mode);
 }
 
+// ── Phase 1: quick mic-to-textarea (Web Speech API) ──────────────────────────
+
 function initVoice() {
   const voiceBtn = document.getElementById('voice-btn');
   if (!voiceBtn) return;
@@ -2957,11 +2959,8 @@ function initVoice() {
   }
 
   voiceBtn.addEventListener('click', () => {
-    if (voiceRecording) {
-      stopVoice();
-    } else {
-      startVoice();
-    }
+    if (voiceRecording) stopVoice();
+    else startVoice();
   });
 }
 
@@ -2992,7 +2991,6 @@ function startVoice() {
   voiceRecognition.onend = () => {
     voiceRecording = false;
     voiceBtn?.classList.remove('recording');
-    // Trim trailing space from interim being committed
     if (chatInput) chatInput.value = chatInput.value.trimEnd();
   };
 
@@ -3014,12 +3012,275 @@ function stopVoice() {
   document.getElementById('voice-btn')?.classList.remove('recording');
 }
 
+// ── Phase 3: VoiceMode overlay (full-screen conversation UI) ─────────────────
+
+class VoiceMode {
+  constructor() {
+    this.overlay = document.getElementById('voice-overlay');
+    this.waveformEl = document.getElementById('voice-waveform');
+    this.subtitlesEl = document.getElementById('voice-subtitles');
+    this.statusEl = document.getElementById('voice-status');
+    this.closeBtn = document.getElementById('voice-overlay-close');
+
+    this.audioCtx = null;
+    this.analyser = null;
+    this.micStream = null;
+    this.animFrame = null;
+    this.recognition = null;
+    this.closed = true;
+    this.isAiThinking = false;
+    this.bars = [];
+
+    this._buildWaveform();
+    this.closeBtn?.addEventListener('click', () => this.close());
+
+    // Close on Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !this.closed) this.close();
+    });
+  }
+
+  _buildWaveform() {
+    if (!this.waveformEl) return;
+    for (let i = 0; i < 32; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'wf-bar';
+      this.waveformEl.appendChild(bar);
+      this.bars.push(bar);
+    }
+  }
+
+  async open() {
+    if (!this.overlay) return;
+    this.closed = false;
+    if (this.subtitlesEl) this.subtitlesEl.innerHTML = '';
+    this.overlay.classList.remove('hidden');
+    this._setStatus('Listening...');
+    await this._initAudio();
+    this._startListening();
+  }
+
+  close() {
+    this.closed = true;
+    this._stopListening();
+    this._stopAudio();
+    this.overlay?.classList.add('hidden');
+    // Exchanges already live in chatMessagesData — just re-render
+    renderChatMessages();
+    scrollChatToShowPromptAtTop();
+    saveChatMessages();
+  }
+
+  async _initAudio() {
+    try {
+      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = this.audioCtx.createMediaStreamSource(this.micStream);
+      this.analyser = this.audioCtx.createAnalyser();
+      this.analyser.fftSize = 64; // 32 bins
+      this.analyser.smoothingTimeConstant = 0.75;
+      source.connect(this.analyser);
+      this._animateWaveform();
+    } catch (e) {
+      console.warn('VoiceMode: mic access denied', e);
+      this._setStatus('Microphone access denied');
+    }
+  }
+
+  _stopAudio() {
+    if (this.animFrame) { cancelAnimationFrame(this.animFrame); this.animFrame = null; }
+    this.micStream?.getTracks().forEach((t) => t.stop());
+    try { this.audioCtx?.close(); } catch (_) {}
+    this.audioCtx = null;
+    this.analyser = null;
+    this.micStream = null;
+  }
+
+  _animateWaveform() {
+    const data = new Uint8Array(32);
+    const tick = () => {
+      if (!this.analyser) return;
+      this.analyser.getByteFrequencyData(data);
+      const t = Date.now() / 500;
+      this.bars.forEach((bar, i) => {
+        let h;
+        if (this.isAiThinking) {
+          // Gentle ripple wave while AI is thinking
+          h = 12 + Math.sin(t + i * 0.5) * 10 + Math.sin(t * 1.7 + i * 0.3) * 5;
+        } else {
+          h = Math.max(4, (data[i] / 255) * 76);
+        }
+        bar.style.height = Math.round(h) + 'px';
+      });
+      this.animFrame = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  _startListening() {
+    if (this.closed || this.isAiThinking) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { this._setStatus('Speech recognition not supported'); return; }
+
+    this.recognition = new SR();
+    this.recognition.continuous = false;
+    this.recognition.interimResults = true;
+    this.recognition.lang = navigator.language || 'en-US';
+
+    let userSubEl = null;
+    let finalText = '';
+
+    this.recognition.onstart = () => {
+      this._setStatus('Listening...');
+      userSubEl = this._addSubtitle('user', '');
+      finalText = '';
+    };
+
+    this.recognition.onresult = (e) => {
+      let interim = '';
+      for (const r of e.results) {
+        if (r.isFinal) finalText += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      if (userSubEl) userSubEl.textContent = finalText + interim;
+      this.subtitlesEl?.scrollTo({ top: this.subtitlesEl.scrollHeight, behavior: 'smooth' });
+    };
+
+    this.recognition.onend = async () => {
+      const text = finalText.trim() || (userSubEl?.textContent || '').trim();
+      if (!text && userSubEl) userSubEl.remove();
+      if (text && !this.closed && !this.isAiThinking) {
+        await this._sendToAi(text);
+      } else if (!text && !this.closed && !this.isAiThinking) {
+        setTimeout(() => this._startListening(), 400);
+      }
+    };
+
+    this.recognition.onerror = (e) => {
+      if (e.error === 'no-speech') {
+        if (!this.closed && !this.isAiThinking) setTimeout(() => this._startListening(), 400);
+      } else if (e.error !== 'aborted') {
+        console.warn('VoiceMode recognition error:', e.error);
+      }
+    };
+
+    try { this.recognition.start(); } catch (e) { console.warn('SR start error:', e); }
+  }
+
+  _stopListening() {
+    try { this.recognition?.abort(); } catch (_) {}
+    this.recognition = null;
+  }
+
+  async _sendToAi(text) {
+    this.isAiThinking = true;
+    this._setStatus('Thinking...');
+
+    const providerId = chatModelSelect?.value;
+    const provider = getSelectedProvider();
+    if (!providerId || !provider) {
+      this._addSubtitle('assistant', '⚠️ No model selected. Please select a model first.');
+      this.isAiThinking = false;
+      this._setStatus('Listening...');
+      if (!this.closed) setTimeout(() => this._startListening(), 600);
+      return;
+    }
+
+    // Push user message into shared history so context is correct
+    chatMessagesData.push({ role: 'user', content: text });
+
+    const contextPack = await buildKnowledgebaseContextForPrompt(text).catch(() => ({ contextDocuments: [], references: [] }));
+    const messages = buildMessagesForApi(provider);
+    const contextWindow = {
+      maxContextLength: toInt(provider.maxContextLength),
+      loadedContextLength: toInt(provider.loadedContextLength),
+      effectiveContextLength: getProviderEffectiveContextLength(provider),
+      maxOutputTokens: getProviderReservedOutputTokens(provider),
+    };
+
+    let accumulated = '';
+    const aiSubEl = this._addSubtitle('assistant', '');
+
+    const onDone = async (result) => {
+      if (result?.error) {
+        aiSubEl.textContent = '⚠️ ' + (result.error || 'Error');
+        // Roll back the user message we pushed since AI failed
+        const idx = chatMessagesData.findLastIndex?.((m) => m.role === 'user' && m.content === text) ?? -1;
+        if (idx !== -1) chatMessagesData.splice(idx, 1);
+      } else {
+        aiSubEl.textContent = accumulated || aiSubEl.textContent;
+        chatMessagesData.push({ role: 'assistant', content: accumulated });
+        await saveChatMessages();
+      }
+      this.isAiThinking = false;
+      this._setStatus('Listening...');
+      if (!this.closed) setTimeout(() => this._startListening(), 500);
+    };
+
+    streamChunkHandler = (chunk) => {
+      accumulated += chunk;
+      aiSubEl.textContent = accumulated;
+      this.subtitlesEl?.scrollTo({ top: this.subtitlesEl.scrollHeight, behavior: 'smooth' });
+    };
+    streamDoneHandler = onDone;
+
+    try {
+      const res = await window.mdviewer?.chatCompletionStream?.({
+        providerId,
+        messages,
+        contextDocuments: contextPack.contextDocuments,
+        contextWindow,
+      });
+      if (res?.error) {
+        // Streaming not available — fall back to non-streaming
+        streamChunkHandler = null;
+        streamDoneHandler = null;
+        const nonStream = await window.mdviewer?.chatCompletion?.({
+          providerId, messages, contextDocuments: contextPack.contextDocuments, contextWindow,
+        }).catch((e) => ({ error: e.message }));
+        accumulated = nonStream?.content || '';
+        await onDone(nonStream?.error ? { error: nonStream.error } : {});
+      }
+    } catch (e) {
+      streamChunkHandler = null;
+      streamDoneHandler = null;
+      await onDone({ error: e.message });
+    }
+  }
+
+  _addSubtitle(role, text) {
+    const el = document.createElement('div');
+    el.className = 'voice-sub voice-sub-' + role;
+    el.textContent = text;
+    this.subtitlesEl?.appendChild(el);
+    this.subtitlesEl?.scrollTo({ top: this.subtitlesEl.scrollHeight });
+    return el;
+  }
+
+  _setStatus(text) {
+    if (this.statusEl) this.statusEl.textContent = text;
+  }
+}
+
+let voiceMode = null;
+
+function initVoiceMode() {
+  const aiVoiceBtn = document.getElementById('ai-voice-btn');
+  if (aiVoiceBtn) {
+    aiVoiceBtn.addEventListener('click', () => {
+      if (!voiceMode) voiceMode = new VoiceMode();
+      voiceMode.open();
+    });
+  }
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 initTheme();
 initSettingsGroups();
 initAiSettings();
 initChatTab();
 initVoice();
+initVoiceMode();
 window.mdviewer?.onKbImportProgress?.(handleKbImportProgress);
 kbHelpBtn?.addEventListener('click', openKnowledgebaseHelpTab);
 kbImportFileBtn?.addEventListener('click', importKnowledgebaseFile);

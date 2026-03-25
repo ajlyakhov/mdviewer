@@ -2117,3 +2117,47 @@ ipcMain.handle('save-open-tabs', (_, { openTabs, activeTabPath }) => {
   store.set('activeTabPath', activeTabPath);
   return { ok: true };
 });
+
+// ─── Whisper STT ──────────────────────────────────────────────────────────────
+let _whisperPipeline = null;
+let _whisperLoading = false;
+let _whisperLoadPromise = null;
+
+async function loadWhisperPipeline(progressCb) {
+  if (_whisperPipeline) return _whisperPipeline;
+  if (_whisperLoadPromise) return _whisperLoadPromise;
+  _whisperLoading = true;
+  _whisperLoadPromise = (async () => {
+    const { pipeline, env } = await import('@xenova/transformers');
+    env.cacheDir = path.join(app.getPath('userData'), 'whisper-models');
+    env.allowLocalModels = false;
+    _whisperPipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base.en', {
+      progress_callback: progressCb,
+    });
+    _whisperLoading = false;
+    return _whisperPipeline;
+  })().catch((e) => {
+    _whisperLoading = false;
+    _whisperLoadPromise = null;
+    throw e;
+  });
+  return _whisperLoadPromise;
+}
+
+ipcMain.handle('whisper-get-status', () => ({
+  loaded: !!_whisperPipeline,
+  loading: _whisperLoading,
+}));
+
+ipcMain.handle('whisper-transcribe', async (event, { audioData, sampleRate }) => {
+  try {
+    const transcriber = await loadWhisperPipeline((p) => {
+      event.sender.send('whisper-progress', p);
+    });
+    const audio = new Float32Array(audioData);
+    const result = await transcriber(audio, { sampling_rate: sampleRate || 16000 });
+    return { text: result.text?.trim() || '' };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
