@@ -2922,25 +2922,51 @@ function initChatTab() {
 
 // ─── Voice Input ─────────────────────────────────────────────────────────────
 
-let voiceRecognition = null;
 let voiceRecording = false;
+let voiceMicStream = null;
+let voiceMediaRecorder = null;
+let voiceAudioChunks = [];
+
 const VOICE_STT_KEY = 'voiceSttMode'; // 'webspeech' | 'whisper'
 
 function getVoiceSttMode() {
-  return localStorage.getItem(VOICE_STT_KEY) || 'webspeech';
+  return localStorage.getItem(VOICE_STT_KEY) || 'whisper';
 }
 
 function setVoiceSttMode(mode) {
   localStorage.setItem(VOICE_STT_KEY, mode);
 }
 
-// ── Phase 1: quick mic-to-textarea (Web Speech API) ──────────────────────────
+// Decode an audio blob and resample to 16 kHz mono Float32Array (Whisper input format)
+async function decodeAndResampleAudio(arrayBuffer) {
+  const audioCtx = new AudioContext();
+  let decoded;
+  try {
+    decoded = await audioCtx.decodeAudioData(arrayBuffer);
+  } finally {
+    try { audioCtx.close(); } catch (_) {}
+  }
+  const targetRate = 16000;
+  if (decoded.sampleRate === targetRate && decoded.numberOfChannels === 1) {
+    return decoded.getChannelData(0);
+  }
+  const targetLength = Math.round(decoded.duration * targetRate);
+  const offlineCtx = new OfflineAudioContext(1, targetLength, targetRate);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offlineCtx.destination);
+  source.start(0);
+  const rendered = await offlineCtx.startRendering();
+  return rendered.getChannelData(0);
+}
+
+// ── Phase 1: quick mic-to-textarea ────────────────────────────────────────────
 
 function initVoice() {
   const voiceBtn = document.getElementById('voice-btn');
   if (!voiceBtn) return;
 
-  // Restore settings UI
+  // Restore settings radio
   const sttMode = getVoiceSttMode();
   const radioEl = document.querySelector(`input[name="stt-mode"][value="${sttMode}"]`);
   if (radioEl && !radioEl.disabled) radioEl.checked = true;
@@ -2951,65 +2977,72 @@ function initVoice() {
     });
   });
 
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    voiceBtn.classList.add('unsupported');
-    voiceBtn.title = 'Voice input not supported in this environment';
-    return;
-  }
-
   voiceBtn.addEventListener('click', () => {
     if (voiceRecording) stopVoice();
     else startVoice();
   });
 }
 
-function startVoice() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return;
-
+async function startVoice() {
+  if (voiceRecording) return;
   const voiceBtn = document.getElementById('voice-btn');
-  const baseText = chatInput?.value?.trimEnd() ?? '';
 
-  voiceRecognition = new SpeechRecognition();
-  voiceRecognition.continuous = false;
-  voiceRecognition.interimResults = true;
-  voiceRecognition.lang = navigator.language || 'en-US';
+  try {
+    voiceMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch (e) {
+    console.warn('Voice: mic access denied', e);
+    return;
+  }
 
-  voiceRecognition.onresult = (event) => {
-    let interim = '';
-    let final = '';
-    for (const result of event.results) {
-      if (result.isFinal) final += result[0].transcript;
-      else interim += result[0].transcript;
+  voiceAudioChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+  voiceMediaRecorder = new MediaRecorder(voiceMicStream, mimeType ? { mimeType } : {});
+
+  voiceMediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) voiceAudioChunks.push(e.data);
+  };
+
+  voiceMediaRecorder.onstop = async () => {
+    voiceMicStream?.getTracks().forEach((t) => t.stop());
+    voiceMicStream = null;
+    voiceBtn?.classList.remove('recording');
+    voiceBtn?.classList.add('transcribing');
+
+    try {
+      const blob = new Blob(voiceAudioChunks, { type: mimeType || 'audio/webm' });
+      voiceAudioChunks = [];
+      const arrayBuffer = await blob.arrayBuffer();
+      const audio = await decodeAndResampleAudio(arrayBuffer);
+      const result = await window.mdviewer?.whisperTranscribe?.({
+        audioData: Float32Array.from(audio).buffer,
+        sampleRate: 16000,
+      });
+      if (result?.text && chatInput) {
+        const base = chatInput.value.trimEnd();
+        chatInput.value = base + (base ? ' ' : '') + result.text;
+        autoResizeTextarea(chatInput);
+      } else if (result?.error) {
+        console.warn('Whisper transcription error:', result.error);
+      }
+    } catch (e) {
+      console.error('Voice transcription failed:', e);
     }
-    const appended = final || interim;
-    chatInput.value = baseText + (baseText && appended ? ' ' : '') + appended;
-    autoResizeTextarea(chatInput);
-  };
 
-  voiceRecognition.onend = () => {
     voiceRecording = false;
-    voiceBtn?.classList.remove('recording');
-    if (chatInput) chatInput.value = chatInput.value.trimEnd();
+    voiceBtn?.classList.remove('transcribing');
   };
 
-  voiceRecognition.onerror = (e) => {
-    if (e.error !== 'aborted') console.warn('Voice recognition error:', e.error);
-    voiceRecording = false;
-    voiceBtn?.classList.remove('recording');
-  };
-
-  voiceRecognition.start();
+  voiceMediaRecorder.start(100);
   voiceRecording = true;
   voiceBtn?.classList.add('recording');
 }
 
 function stopVoice() {
-  voiceRecognition?.stop();
-  voiceRecognition = null;
+  if (voiceMediaRecorder?.state === 'recording') {
+    try { voiceMediaRecorder.stop(); } catch (_) {}
+  }
+  voiceMediaRecorder = null;
   voiceRecording = false;
-  document.getElementById('voice-btn')?.classList.remove('recording');
 }
 
 // ── Phase 3: VoiceMode overlay (full-screen conversation UI) ─────────────────
@@ -3026,15 +3059,19 @@ class VoiceMode {
     this.analyser = null;
     this.micStream = null;
     this.animFrame = null;
-    this.recognition = null;
+    this.mediaRecorder = null;
+    this.audioChunks = [];
     this.closed = true;
     this.isAiThinking = false;
     this.bars = [];
 
+    // Silence detection state (reset each recording session)
+    this._silenceFrames = 0;
+    this._voiceFrames = 0;
+    this._hasVoice = false;
+
     this._buildWaveform();
     this.closeBtn?.addEventListener('click', () => this.close());
-
-    // Close on Escape
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !this.closed) this.close();
     });
@@ -3065,7 +3102,6 @@ class VoiceMode {
     this._stopListening();
     this._stopAudio();
     this.overlay?.classList.add('hidden');
-    // Exchanges already live in chatMessagesData — just re-render
     renderChatMessages();
     scrollChatToShowPromptAtTop();
     saveChatMessages();
@@ -3077,7 +3113,7 @@ class VoiceMode {
       this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = this.audioCtx.createMediaStreamSource(this.micStream);
       this.analyser = this.audioCtx.createAnalyser();
-      this.analyser.fftSize = 64; // 32 bins
+      this.analyser.fftSize = 64;
       this.analyser.smoothingTimeConstant = 0.75;
       source.connect(this.analyser);
       this._animateWaveform();
@@ -3098,14 +3134,36 @@ class VoiceMode {
 
   _animateWaveform() {
     const data = new Uint8Array(32);
+    // Silence detection constants
+    const SILENCE_THRESHOLD = 18;   // 0-255 frequency magnitude
+    const SILENCE_FRAMES_STOP = 72; // ~1.2s at ~60fps before stopping
+    const MIN_VOICE_FRAMES = 10;    // require at least ~0.17s of speech
+
     const tick = () => {
       if (!this.analyser) return;
       this.analyser.getByteFrequencyData(data);
+      const maxVal = Math.max(...data);
+
+      // Silence detection — only while actively recording a user utterance
+      if (!this.isAiThinking && this.mediaRecorder?.state === 'recording') {
+        if (maxVal > SILENCE_THRESHOLD) {
+          this._hasVoice = true;
+          this._voiceFrames++;
+          this._silenceFrames = 0;
+        } else {
+          this._silenceFrames++;
+          if (this._hasVoice && this._voiceFrames >= MIN_VOICE_FRAMES && this._silenceFrames >= SILENCE_FRAMES_STOP) {
+            this._voiceFrames = 0;
+            this._silenceFrames = 0;
+            try { this.mediaRecorder.stop(); } catch (_) {}
+          }
+        }
+      }
+
       const t = Date.now() / 500;
       this.bars.forEach((bar, i) => {
         let h;
         if (this.isAiThinking) {
-          // Gentle ripple wave while AI is thinking
           h = 12 + Math.sin(t + i * 0.5) * 10 + Math.sin(t * 1.7 + i * 0.3) * 5;
         } else {
           h = Math.max(4, (data[i] / 255) * 76);
@@ -3118,58 +3176,78 @@ class VoiceMode {
   }
 
   _startListening() {
-    if (this.closed || this.isAiThinking) return;
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { this._setStatus('Speech recognition not supported'); return; }
+    if (this.closed || this.isAiThinking || !this.micStream) return;
+    this._hasVoice = false;
+    this._voiceFrames = 0;
+    this._silenceFrames = 0;
+    this.audioChunks = [];
+    this._setStatus('Listening...');
 
-    this.recognition = new SR();
-    this.recognition.continuous = false;
-    this.recognition.interimResults = true;
-    this.recognition.lang = navigator.language || 'en-US';
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+    this.mediaRecorder = new MediaRecorder(this.micStream, mimeType ? { mimeType } : {});
 
-    let userSubEl = null;
-    let finalText = '';
-
-    this.recognition.onstart = () => {
-      this._setStatus('Listening...');
-      userSubEl = this._addSubtitle('user', '');
-      finalText = '';
+    this.mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) this.audioChunks.push(e.data);
     };
 
-    this.recognition.onresult = (e) => {
-      let interim = '';
-      for (const r of e.results) {
-        if (r.isFinal) finalText += r[0].transcript;
-        else interim += r[0].transcript;
+    this.mediaRecorder.onstop = async () => {
+      if (this.closed) return;
+      if (!this._hasVoice || this.audioChunks.length === 0) {
+        this.audioChunks = [];
+        setTimeout(() => this._startListening(), 300);
+        return;
       }
-      if (userSubEl) userSubEl.textContent = finalText + interim;
-      this.subtitlesEl?.scrollTo({ top: this.subtitlesEl.scrollHeight, behavior: 'smooth' });
+      await this._transcribeAndSend();
     };
 
-    this.recognition.onend = async () => {
-      const text = finalText.trim() || (userSubEl?.textContent || '').trim();
-      if (!text && userSubEl) userSubEl.remove();
-      if (text && !this.closed && !this.isAiThinking) {
-        await this._sendToAi(text);
-      } else if (!text && !this.closed && !this.isAiThinking) {
-        setTimeout(() => this._startListening(), 400);
-      }
-    };
-
-    this.recognition.onerror = (e) => {
-      if (e.error === 'no-speech') {
-        if (!this.closed && !this.isAiThinking) setTimeout(() => this._startListening(), 400);
-      } else if (e.error !== 'aborted') {
-        console.warn('VoiceMode recognition error:', e.error);
-      }
-    };
-
-    try { this.recognition.start(); } catch (e) { console.warn('SR start error:', e); }
+    try { this.mediaRecorder.start(100); } catch (e) { console.warn('MediaRecorder start error:', e); }
   }
 
   _stopListening() {
-    try { this.recognition?.abort(); } catch (_) {}
-    this.recognition = null;
+    if (this.mediaRecorder?.state === 'recording') {
+      try { this.mediaRecorder.stop(); } catch (_) {}
+    }
+    this.mediaRecorder = null;
+  }
+
+  async _transcribeAndSend() {
+    this._setStatus('Transcribing...');
+    const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
+    this.audioChunks = [];
+
+    const userSubEl = this._addSubtitle('user', '…');
+
+    try {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audio = await decodeAndResampleAudio(arrayBuffer);
+      const result = await window.mdviewer?.whisperTranscribe?.({
+        audioData: Float32Array.from(audio).buffer,
+        sampleRate: 16000,
+      });
+
+      if (result?.error) {
+        userSubEl.textContent = '⚠️ ' + result.error;
+        this._setStatus('Listening...');
+        setTimeout(() => this._startListening(), 500);
+        return;
+      }
+
+      const text = result?.text?.trim();
+      if (!text) {
+        userSubEl.remove();
+        this._setStatus('Listening...');
+        setTimeout(() => this._startListening(), 300);
+        return;
+      }
+
+      userSubEl.textContent = text;
+      await this._sendToAi(text);
+    } catch (e) {
+      console.error('VoiceMode transcription error:', e);
+      userSubEl.textContent = '⚠️ Transcription failed';
+      this._setStatus('Listening...');
+      setTimeout(() => this._startListening(), 500);
+    }
   }
 
   async _sendToAi(text) {
@@ -3186,7 +3264,6 @@ class VoiceMode {
       return;
     }
 
-    // Push user message into shared history so context is correct
     chatMessagesData.push({ role: 'user', content: text });
 
     const contextPack = await buildKnowledgebaseContextForPrompt(text).catch(() => ({ contextDocuments: [], references: [] }));
@@ -3204,7 +3281,6 @@ class VoiceMode {
     const onDone = async (result) => {
       if (result?.error) {
         aiSubEl.textContent = '⚠️ ' + (result.error || 'Error');
-        // Roll back the user message we pushed since AI failed
         const idx = chatMessagesData.findLastIndex?.((m) => m.role === 'user' && m.content === text) ?? -1;
         if (idx !== -1) chatMessagesData.splice(idx, 1);
       } else {
@@ -3226,13 +3302,9 @@ class VoiceMode {
 
     try {
       const res = await window.mdviewer?.chatCompletionStream?.({
-        providerId,
-        messages,
-        contextDocuments: contextPack.contextDocuments,
-        contextWindow,
+        providerId, messages, contextDocuments: contextPack.contextDocuments, contextWindow,
       });
       if (res?.error) {
-        // Streaming not available — fall back to non-streaming
         streamChunkHandler = null;
         streamDoneHandler = null;
         const nonStream = await window.mdviewer?.chatCompletion?.({
