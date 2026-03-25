@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-03-25
+
+### Fixed
+
+- Voice input broken in Electron: `SpeechRecognition` fails with a `network` error in `file://` context (routes through Google cloud). Replaced with `MediaRecorder` + local Whisper IPC (`@xenova/transformers`) for both the mic button and voice overlay.
+- Voice overlay silence detection: `AnalyserNode` frequency threshold now auto-stops recording after ~1.2s of silence following detected speech.
+- Mic button now shows an amber "transcribing" pulse state while Whisper processes audio.
+- Whisper STT option in Settings → Voice is now enabled (was marked Coming soon).
+
 ## [3.1.0] - 2026-03-25
 
 ### Added
