@@ -1185,6 +1185,94 @@ html.theme-dark .back-btn:hover {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Voice button */
+.voice-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+.voice-btn:hover {
+  color: var(--text);
+  background: var(--bg-secondary);
+  border-color: var(--accent);
+}
+.voice-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.voice-btn.recording {
+  color: #e53e3e;
+  border-color: #e53e3e;
+  background: rgba(229, 62, 62, 0.08);
+  animation: voice-pulse 1.4s ease-in-out infinite;
+}
+.voice-btn.unsupported {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(229, 62, 62, 0); }
+}
+
+/* Voice settings */
+.voice-stt-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+.voice-radio-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.voice-radio-label:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(102, 126, 234, 0.05);
+}
+.voice-radio-label input[type="radio"] {
+  display: none;
+}
+.voice-radio-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.voice-radio-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .chat-model-row {
   margin-top: 10px;
   display: flex;

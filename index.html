@@ -161,6 +161,30 @@
                 </div>
               </div>
             </div>
+            <div class="settings-main-group collapsed" id="settings-voice-group">
+              <button type="button" class="settings-main-toggle" data-target="settings-voice-content">
+                <span>Voice</span>
+                <span class="settings-main-chevron">▾</span>
+              </button>
+              <div class="settings-main-content" id="settings-voice-content">
+                <div class="settings-group">
+                  <label>Speech-to-text engine</label>
+                  <p class="settings-hint">Choose how voice input is transcribed.</p>
+                  <div class="voice-stt-options">
+                    <label class="voice-radio-label">
+                      <input type="radio" name="stt-mode" value="webspeech" id="stt-webspeech" checked>
+                      <span class="voice-radio-title">System (Web Speech API)</span>
+                      <span class="settings-hint">Fast, streaming. Uses your OS speech engine.</span>
+                    </label>
+                    <label class="voice-radio-label voice-radio-disabled">
+                      <input type="radio" name="stt-mode" value="whisper" id="stt-whisper" disabled>
+                      <span class="voice-radio-title">Local Whisper <span class="settings-badge">Coming soon</span></span>
+                      <span class="settings-hint">Fully offline &amp; private. Downloads ~74 MB model on first use.</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div class="settings-main-group collapsed" id="settings-kb-group">
               <button type="button" class="settings-main-toggle" data-target="settings-kb-content">
                 <span>Knowledgebase</span>
@@ -196,6 +220,14 @@
                   </svg>
                 </button>
                 <textarea id="chat-input" class="chat-input" placeholder="Ask anything" rows="1"></textarea>
+                <button type="button" id="voice-btn" class="voice-btn" title="Voice input" aria-label="Voice input">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+                    <line x1="12" y1="18" x2="12" y2="22"/>
+                    <line x1="8" y1="22" x2="16" y2="22"/>
+                  </svg>
+                </button>
                 <button type="button" id="chat-send" class="chat-send-btn">Send</button>
               </div>
               <div class="chat-model-row">

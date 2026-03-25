@@ -2920,11 +2920,106 @@ function initChatTab() {
   chatSendBtn?.addEventListener('click', () => sendChatMessage());
 }
 
-// Init
+// ─── Voice Input ─────────────────────────────────────────────────────────────
+
+let voiceRecognition = null;
+let voiceRecording = false;
+const VOICE_STT_KEY = 'voiceSttMode'; // 'webspeech' | 'whisper'
+
+function getVoiceSttMode() {
+  return localStorage.getItem(VOICE_STT_KEY) || 'webspeech';
+}
+
+function setVoiceSttMode(mode) {
+  localStorage.setItem(VOICE_STT_KEY, mode);
+}
+
+function initVoice() {
+  const voiceBtn = document.getElementById('voice-btn');
+  if (!voiceBtn) return;
+
+  // Restore settings UI
+  const sttMode = getVoiceSttMode();
+  const radioEl = document.querySelector(`input[name="stt-mode"][value="${sttMode}"]`);
+  if (radioEl && !radioEl.disabled) radioEl.checked = true;
+
+  document.querySelectorAll('input[name="stt-mode"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (!radio.disabled) setVoiceSttMode(radio.value);
+    });
+  });
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    voiceBtn.classList.add('unsupported');
+    voiceBtn.title = 'Voice input not supported in this environment';
+    return;
+  }
+
+  voiceBtn.addEventListener('click', () => {
+    if (voiceRecording) {
+      stopVoice();
+    } else {
+      startVoice();
+    }
+  });
+}
+
+function startVoice() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return;
+
+  const voiceBtn = document.getElementById('voice-btn');
+  const baseText = chatInput?.value?.trimEnd() ?? '';
+
+  voiceRecognition = new SpeechRecognition();
+  voiceRecognition.continuous = false;
+  voiceRecognition.interimResults = true;
+  voiceRecognition.lang = navigator.language || 'en-US';
+
+  voiceRecognition.onresult = (event) => {
+    let interim = '';
+    let final = '';
+    for (const result of event.results) {
+      if (result.isFinal) final += result[0].transcript;
+      else interim += result[0].transcript;
+    }
+    const appended = final || interim;
+    chatInput.value = baseText + (baseText && appended ? ' ' : '') + appended;
+    autoResizeTextarea(chatInput);
+  };
+
+  voiceRecognition.onend = () => {
+    voiceRecording = false;
+    voiceBtn?.classList.remove('recording');
+    // Trim trailing space from interim being committed
+    if (chatInput) chatInput.value = chatInput.value.trimEnd();
+  };
+
+  voiceRecognition.onerror = (e) => {
+    if (e.error !== 'aborted') console.warn('Voice recognition error:', e.error);
+    voiceRecording = false;
+    voiceBtn?.classList.remove('recording');
+  };
+
+  voiceRecognition.start();
+  voiceRecording = true;
+  voiceBtn?.classList.add('recording');
+}
+
+function stopVoice() {
+  voiceRecognition?.stop();
+  voiceRecognition = null;
+  voiceRecording = false;
+  document.getElementById('voice-btn')?.classList.remove('recording');
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
 initTheme();
 initSettingsGroups();
 initAiSettings();
 initChatTab();
+initVoice();
 window.mdviewer?.onKbImportProgress?.(handleKbImportProgress);
 kbHelpBtn?.addEventListener('click', openKnowledgebaseHelpTab);
 kbImportFileBtn?.addEventListener('click', importKnowledgebaseFile);
