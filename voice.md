@@ -43,10 +43,13 @@ A **"Voice"** button in the model row (bottom-left of the chat panel) opens a fu
 
 ## Architecture
 
-### Phase 1 — Web Speech API (shipped)
-- `renderer.js`: `initVoice()`, `startVoice()`, `stopVoice()`
-- Browser-native `SpeechRecognition` / `webkitSpeechRecognition`
-- No IPC, no main-process involvement
+### Phase 1 — MediaRecorder + Whisper (mic button)
+- `renderer.js`: `initVoice()`, `startVoice()`, `stopVoice()`, `decodeAndResampleAudio()`
+- `navigator.mediaDevices.getUserMedia` → `MediaRecorder` → audio blob
+- On stop: `AudioContext.decodeAudioData()` + `OfflineAudioContext` resampling to 16 kHz mono Float32Array
+- Sent to main process via `window.mdviewer.whisperTranscribe()` IPC
+- Button states: idle → recording (red pulse) → transcribing (amber pulse) → idle
+- Note: Web Speech API (`SpeechRecognition`) is not used — it routes through Google's cloud and fails in Electron's `file://` context with a `network` error
 
 ### Phase 2 — Local Whisper STT (foundation shipped, UI toggle coming)
 - `main.js`: `loadWhisperPipeline()` + IPC handlers `whisper-transcribe`, `whisper-get-status`
@@ -60,8 +63,10 @@ A **"Voice"** button in the model row (bottom-left of the chat panel) opens a fu
 ### Phase 3 — VoiceMode overlay (shipped)
 - `renderer.js`: `VoiceMode` class, `initVoiceMode()`
 - Web Audio API `AnalyserNode` with `fftSize=64` for real-time waveform
-- Looping `SpeechRecognition` → reuses existing `chatCompletionStream` / `chatCompletion` IPC
-- `streamChunkHandler` / `streamDoneHandler` globals are set directly, same as regular chat
+- **Silence detection** built into the waveform animation loop: tracks `maxFrequencyValue > threshold` frames; stops `MediaRecorder` after ~1.2s of silence following detected speech
+- Audio recorded via `MediaRecorder` on the same mic stream as the waveform analyser
+- Transcription: `decodeAndResampleAudio()` → `whisperTranscribe` IPC (same as mic button)
+- AI calls reuse existing `chatCompletionStream` / `chatCompletion` IPC with shared `streamChunkHandler`/`streamDoneHandler` globals
 - Exchanges pushed live to `chatMessagesData` for correct context window on multi-turn
 - On close: calls `renderChatMessages()` + `saveChatMessages()` for persistence
 
