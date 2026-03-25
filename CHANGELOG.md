@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-03-25
+
+### Added
+
+- **Voice input (mic button):** Click the mic icon in the chat input row to start speech-to-text. Live interim transcription appears in the textarea as you speak; click again or pause to stop. Uses Web Speech API — no download required.
+- **Voice conversation mode (overlay):** Click the "Voice" button in the model row to open a full-screen voice experience.
+  - 32-bar live audio waveform visualizer (Web Audio API AnalyserNode) that reacts to real mic input.
+  - Waveform plays a gentle ripple animation while the AI is thinking.
+  - Karaoke-style subtitles: user speech appears right-aligned (white), AI response streams in left-aligned (purple) with fade-in animation.
+  - Auto-looping conversation: speak → AI responds → listening resumes automatically.
+  - Multi-turn context: exchanges are pushed live to chat history so each AI turn has full conversation context.
+  - Fallback to non-streaming chat if stream is unavailable.
+  - Close with × button or Escape; full conversation is committed to the active chat session.
+- **Whisper STT foundation (Phase 2):** IPC infrastructure for fully local, offline transcription via `@xenova/transformers` (`Xenova/whisper-base.en`, ~74 MB). Model is downloaded once and cached in `{userData}/whisper-models/`. Settings toggle UI prepared; renderer integration coming in a follow-up.
+- Voice settings section in Settings with STT engine selector (System / Local Whisper).
+- `voice.md` — full voice feature documentation, architecture overview, phase roadmap, platform support.
+
 ## [2.2.0] - 2026-03-22
 
 ### Added
