@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-03-28
+
+### Added
+
+- In-tab "Speak with docs" workflow with full voice conversation loop (listen -> transcribe -> answer -> speak -> listen).
+- System TTS playback for Speak mode with settings for voice selection, speech rate, and language-aware speech configuration.
+- Voice controls in header and Speak UI, including quick Settings access and in-session "Stop" for long spoken replies.
+- Richer Voice settings with persistent STT/TTS configuration and Whisper model management.
+
+### Changed
+
+- Voice-mode assistant output is now tuned for spoken conversation (short, plain responses with minimal formatting).
+- Ollama defaults now prioritize fast local response models for new and migrated configurations.
+- Speech recognition flow now enforces non-overlapping turn-taking while assistant speech is active.
+
+### Fixed
+
+- Speak-mode STT quality degradation across turns by resetting capture/VAD state each session.
+- Stale PCM chunk bleed between utterances via capture-session guards in AudioWorklet handling.
+- Multiple voice-mode regressions around no-speech handling, subtitle rendering continuity, and fallback behavior.
+
+### Breaking
+
+- Voice experience is no longer the old overlay interaction model; it is now a dedicated Speak tab with updated controls and behavior.
+
 ## [3.1.1] - 2026-03-25
 
 ### Fixed
