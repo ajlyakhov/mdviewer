@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execSync, spawn } = require('child_process');
+const { execSync, spawn, fork } = require('child_process');
 const { chatCompletion: llmChatCompletion, buildStreamRequest } = require('./llm-adapter');
 const { Worker } = require('worker_threads');
 const { createKnowledgebaseService, DEFAULT_EMBEDDING_MODEL } = require('./knowledgebase/service');
@@ -11,6 +11,7 @@ let mainWindow;
 let pendingOpenFile = null;
 let pdfParseLoader = null;
 let knowledgebase = null;
+const lastVoiceDebugBySender = new Map();
 
 function getWindow() {
   return BrowserWindow.getFocusedWindow() || mainWindow;
@@ -148,11 +149,47 @@ function createWindow() {
     mainWindow = null;
   });
 
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const lvl = ['debug', 'info', 'warn', 'error'][level] || String(level);
+    console.log(`[renderer:${lvl}] ${sourceId || 'unknown'}:${line || 0} ${message}`);
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_, details) => {
+    const senderId = mainWindow?.webContents?.id;
+    const lastVoiceState = senderId ? lastVoiceDebugBySender.get(senderId) : null;
+    console.error('[electron] renderer process gone:', details);
+    if (lastVoiceState) {
+      console.error('[electron] last voice state before crash:', lastVoiceState);
+    } else {
+      console.error('[electron] last voice state before crash: <none>');
+    }
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    console.error('[electron] did-fail-load:', { errorCode, errorDescription, validatedURL });
+  });
+
+  app.on('child-process-gone', (_, details) => {
+    console.error('[electron] child process gone:', details);
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 }
+
+ipcMain.on('voice-debug', (event, payload = {}) => {
+  const senderId = event.sender?.id;
+  const logEntry = {
+    ts: new Date().toISOString(),
+    senderId,
+    ...payload,
+  };
+  if (senderId) lastVoiceDebugBySender.set(senderId, logEntry);
+  console.log('[voice-debug]', logEntry);
+});
 
 app.setAboutPanelOptions({
   applicationName: 'MD Viewer',
@@ -186,6 +223,13 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  if (_whisperChild) {
+    _whisperChild.kill();
+    _whisperChild = null;
+  }
 });
 
 app.on('activate', () => {
@@ -969,7 +1013,7 @@ function parseOllamaTagsPayload(payload) {
     embeddingModels,
     hasLlm: llmModels.length > 0,
     hasEmbedding: embeddingModels.length > 0,
-    recommendedChatModels: ['qwen3.5:4b', 'qwen3.5', 'llama3.1:8b'],
+    recommendedChatModels: ['llama3.2:1b', 'qwen2.5:1.5b', 'gemma2:2b', 'qwen3.5:4b'],
     recommendedEmbeddingModels: ['nomic-embed-text', 'mxbai-embed-large'],
   };
 }
@@ -1023,6 +1067,33 @@ async function ensureOllamaServerRunning(ollamaCmd, baseUrl) {
   });
   child.unref();
   return waitForOllama(baseUrl, 25000);
+}
+
+async function ensureOllamaAvailableForProvider(provider) {
+  if (!provider || provider.type !== 'ollama') return { ok: true, started: false };
+  const baseUrl = normalizeLocalBaseUrl(provider.baseUrl, 'http://127.0.0.1:11434');
+  provider.baseUrl = baseUrl;
+  const probe = await checkOllamaAvailability(baseUrl);
+  if (probe?.ok) return { ok: true, started: false };
+
+  const ollamaCmd = await resolveOllamaExecutable();
+  if (!ollamaCmd) {
+    return {
+      ok: false,
+      error:
+        `Ollama is not running at ${baseUrl} and executable was not found.\n` +
+        'Install/start Ollama, or run Auto-setup in Settings → AI.',
+    };
+  }
+
+  const started = await ensureOllamaServerRunning(ollamaCmd, baseUrl);
+  if (!started?.ok) {
+    return {
+      ok: false,
+      error: started?.error || `Failed to start Ollama service at ${baseUrl}`,
+    };
+  }
+  return { ok: true, started: true };
 }
 
 async function installOllamaIfMissing(opts = {}) {
@@ -1346,8 +1417,27 @@ ipcMain.handle('import-pdf', async (event, sourcePdfPath) => {
 
 // AI / Chat
 ipcMain.handle('get-ai-config', () => {
+  const migrateFastOllamaModel = (providers = []) => {
+    let changed = false;
+    const next = providers.map((p) => {
+      if (!p || p.type !== 'ollama') return p;
+      const modelId = String(p.modelId || '').trim();
+      if (modelId === 'qwen3.5:4b' || modelId === 'qwen3.5') {
+        changed = true;
+        return { ...p, modelId: 'llama3.2:1b' };
+      }
+      return p;
+    });
+    return { changed, next };
+  };
+  const currentProviders = store.get('aiProviders', []);
+  const migrated = migrateFastOllamaModel(currentProviders);
+  if (migrated.changed) {
+    store.set('aiProviders', migrated.next);
+    console.log('[ai-config] migrated ollama model to llama3.2:1b for speed');
+  }
   return {
-    aiProviders: store.get('aiProviders', []),
+    aiProviders: migrated.next,
     aiApiKeys: store.get('aiApiKeys', {}),
   };
 });
@@ -1700,6 +1790,8 @@ ipcMain.handle('chat-completion', async (_, { providerId, messages, contextDocum
     merged.effectiveContextLength = contextWindow.effectiveContextLength ?? merged.effectiveContextLength;
     merged.maxOutputTokens = contextWindow.maxOutputTokens ?? merged.maxOutputTokens;
   }
+  const ollamaReady = await ensureOllamaAvailableForProvider(merged);
+  if (!ollamaReady.ok) return { error: ollamaReady.error };
   try {
     const content = await llmChatCompletion(merged, messages, contextDocuments || []);
     return { content };
@@ -1724,6 +1816,8 @@ ipcMain.handle('chat-completion-stream', async (event, { providerId, messages, c
     merged.effectiveContextLength = contextWindow.effectiveContextLength ?? merged.effectiveContextLength;
     merged.maxOutputTokens = contextWindow.maxOutputTokens ?? merged.maxOutputTokens;
   }
+  const ollamaReady = await ensureOllamaAvailableForProvider(merged);
+  if (!ollamaReady.ok) return { error: ollamaReady.error };
   const request = buildStreamRequest(merged, messages, contextDocuments || []);
   if (!request) return { error: 'Failed to build stream request' };
   try {
@@ -1877,7 +1971,7 @@ ipcMain.handle('check-lmstudio-availability', async (_, baseUrl) => {
       embeddingModels,
       hasLlm: llmModels.length > 0,
       hasEmbedding: embeddingModels.length > 0,
-      recommendedChatModels: ['qwen3.5:4b', 'qwen3.5', 'llama-3.1-8b-instruct'],
+      recommendedChatModels: ['llama3.2:1b', 'qwen2.5:1.5b', 'gemma2:2b', 'qwen3.5:4b'],
       recommendedEmbeddingModels: ['nomic-embed-text-v1.5', 'mxbai-embed-large-v1'],
     };
   } catch (err) {
@@ -1921,7 +2015,7 @@ ipcMain.handle('uninstall-ollama', async (event, args = {}) => {
 ipcMain.handle('start-ollama-autosetup', async (event, args = {}) => {
   const sender = event.sender;
   const baseUrl = normalizeLocalBaseUrl(args.baseUrl, 'http://127.0.0.1:11434');
-  const chatModel = String(args.chatModel || 'qwen3.5:4b').trim() || 'qwen3.5:4b';
+  const chatModel = String(args.chatModel || 'llama3.2:1b').trim() || 'llama3.2:1b';
   const embeddingModel = String(args.embeddingModel || 'nomic-embed-text').trim() || 'nomic-embed-text';
   const pullTelemetry = {
     'pull-chat': { lastBytes: 0, lastTs: 0, bps: 0 },
@@ -2119,45 +2213,205 @@ ipcMain.handle('save-open-tabs', (_, { openTabs, activeTabPath }) => {
 });
 
 // ─── Whisper STT ──────────────────────────────────────────────────────────────
-let _whisperPipeline = null;
+const WHISPER_MODEL = 'Xenova/whisper-small';
+let _whisperChild = null;
+let _whisperReady = false;
 let _whisperLoading = false;
-let _whisperLoadPromise = null;
+let _whisperMsgId = 0;
+let _whisperBackend = 'native';
+const _whisperPending = new Map();
 
-async function loadWhisperPipeline(progressCb) {
-  if (_whisperPipeline) return _whisperPipeline;
-  if (_whisperLoadPromise) return _whisperLoadPromise;
-  _whisperLoading = true;
-  _whisperLoadPromise = (async () => {
-    const { pipeline, env } = await import('@xenova/transformers');
-    env.cacheDir = path.join(app.getPath('userData'), 'whisper-models');
-    env.allowLocalModels = false;
-    _whisperPipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base.en', {
-      progress_callback: progressCb,
+function getWhisperCacheDir() {
+  return path.join(app.getPath('userData'), 'whisper-models');
+}
+
+function resolveNodeExecPath() {
+  const envNode =
+    process.env.MDVIEWER_WHISPER_NODE_PATH ||
+    process.env.NODE_BINARY ||
+    process.env.NODE;
+  if (envNode && fs.existsSync(envNode)) return envNode;
+  try {
+    const discovered = execSync('command -v node', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+    if (discovered && fs.existsSync(discovered)) return discovered;
+  } catch (_) {}
+  return process.execPath;
+}
+
+function ensureWhisperChild(progressCb) {
+  if (_whisperChild && _whisperReady) return Promise.resolve();
+  if (_whisperChild && _whisperLoading) {
+    return new Promise((resolve, reject) => {
+      const onMsg = (msg) => {
+        if (msg.type === 'ready') { _whisperChild.removeListener('message', onMsg); resolve(); }
+        if (msg.type === 'load-error') { _whisperChild.removeListener('message', onMsg); reject(new Error(msg.error)); }
+        if (msg.type === 'progress' && typeof progressCb === 'function') progressCb(msg.data);
+      };
+      _whisperChild.on('message', onMsg);
     });
-    _whisperLoading = false;
-    return _whisperPipeline;
-  })().catch((e) => {
-    _whisperLoading = false;
-    _whisperLoadPromise = null;
-    throw e;
+  }
+  _whisperLoading = true;
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, 'whisper-worker.js');
+    const nodeExecPath = resolveNodeExecPath();
+    const useElectronNodeMode = nodeExecPath === process.execPath;
+    _whisperChild = fork(workerPath, [], {
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      execPath: nodeExecPath,
+      env: {
+        ...process.env,
+        ...(useElectronNodeMode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      },
+    });
+    console.log(
+      '[whisper] child spawn config:',
+      JSON.stringify({ execPath: nodeExecPath, backend: _whisperBackend, electronNodeMode: useElectronNodeMode })
+    );
+    _whisperChild.on('message', (msg) => {
+      if (msg.type === 'ready') {
+        _whisperReady = true;
+        _whisperLoading = false;
+        resolve();
+        return;
+      }
+      if (msg.type === 'load-error') {
+        _whisperLoading = false;
+        _whisperChild.kill();
+        _whisperChild = null;
+        reject(new Error(msg.error));
+        return;
+      }
+      if (msg.type === 'progress') {
+        if (typeof progressCb === 'function') progressCb(msg.data);
+        return;
+      }
+      if (msg.type === 'result' || msg.type === 'error') {
+        const pending = _whisperPending.get(msg.id);
+        if (pending) {
+          _whisperPending.delete(msg.id);
+          if (msg.type === 'result') pending.resolve(msg.data);
+          else pending.reject(new Error(msg.error));
+        }
+      }
+    });
+    _whisperChild.on('error', (err) => {
+      _whisperLoading = false;
+      _whisperReady = false;
+      _whisperChild = null;
+      reject(err);
+    });
+    _whisperChild.on('exit', (code, signal) => {
+      _whisperReady = false;
+      _whisperLoading = false;
+      _whisperChild = null;
+      const reason = signal ? `signal ${signal}` : `code ${code}`;
+      for (const [id, p] of _whisperPending) {
+        p.reject(new Error(`Whisper process exited with ${reason}`));
+        _whisperPending.delete(id);
+      }
+    });
+    _whisperChild.send({
+      type: 'load',
+      model: WHISPER_MODEL,
+      cacheDir: getWhisperCacheDir(),
+      backend: _whisperBackend,
+    });
   });
-  return _whisperLoadPromise;
+}
+
+function bufferToFloat32Array(data) {
+  if (data instanceof Float32Array) return data;
+  if (data instanceof ArrayBuffer) return new Float32Array(data);
+  if (Buffer.isBuffer(data)) {
+    return new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
+  }
+  return new Float32Array(data);
+}
+
+function whisperTranscribeViaChild(audioData, sampleRate, languageHint = '') {
+  return new Promise((resolve, reject) => {
+    const id = ++_whisperMsgId;
+    _whisperPending.set(id, { resolve, reject });
+    const f32 = bufferToFloat32Array(audioData);
+    console.log('[whisper] sending transcribe, samples:', f32.length, 'rate:', sampleRate, 'languageHint:', languageHint || 'auto');
+    _whisperChild.send({
+      type: 'transcribe',
+      id,
+      audioData: Array.from(f32),
+      sampleRate,
+      languageHint: String(languageHint || '').trim(),
+    });
+  });
+}
+
+function isWhisperModelCached() {
+  const cacheDir = getWhisperCacheDir();
+  const modelSlug = WHISPER_MODEL.replace('/', '--');
+  const modelDir = path.join(cacheDir, modelSlug);
+  if (!fs.existsSync(modelDir)) return false;
+  try {
+    const entries = fs.readdirSync(modelDir);
+    return entries.some((e) => e.endsWith('.onnx'));
+  } catch (_) {
+    return false;
+  }
 }
 
 ipcMain.handle('whisper-get-status', () => ({
-  loaded: !!_whisperPipeline,
+  loaded: _whisperReady,
   loading: _whisperLoading,
+  cached: isWhisperModelCached(),
+  model: WHISPER_MODEL,
 }));
 
-ipcMain.handle('whisper-transcribe', async (event, { audioData, sampleRate }) => {
+ipcMain.handle('whisper-preload', async (event) => {
+  if (_whisperReady) return { ok: true, alreadyLoaded: true };
   try {
-    const transcriber = await loadWhisperPipeline((p) => {
+    await ensureWhisperChild((p) => {
       event.sender.send('whisper-progress', p);
     });
-    const audio = new Float32Array(audioData);
-    const result = await transcriber(audio, { sampling_rate: sampleRate || 16000 });
-    return { text: result.text?.trim() || '' };
+    return { ok: true };
   } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('whisper-transcribe', async (event, { audioData, sampleRate, languageHint }) => {
+  console.log('[whisper] transcribe request received, dataType:', typeof audioData,
+    'isBuffer:', Buffer.isBuffer(audioData), 'byteLength:', audioData?.byteLength ?? audioData?.length,
+    'languageHint:', String(languageHint || '').trim() || 'auto');
+  try {
+    await ensureWhisperChild((p) => {
+      event.sender.send('whisper-progress', p);
+    });
+    const result = await whisperTranscribeViaChild(audioData, sampleRate || 16000, languageHint);
+    console.log('[whisper] transcribe result:', result);
+    return result;
+  } catch (err) {
+    console.error('[whisper] transcribe error:', err);
+    if (_whisperBackend !== 'wasm' && /signal SIGTRAP|signal SIGSEGV|onnxruntime/i.test(String(err?.message || err))) {
+      console.warn('[whisper] switching backend to WASM after native failure');
+      _whisperBackend = 'wasm';
+      if (_whisperChild) {
+        try { _whisperChild.kill(); } catch (_) {}
+        _whisperChild = null;
+      }
+      _whisperReady = false;
+      _whisperLoading = false;
+      try {
+        await ensureWhisperChild((p) => {
+          event.sender.send('whisper-progress', p);
+        });
+        const retry = await whisperTranscribeViaChild(audioData, sampleRate || 16000, languageHint);
+        console.log('[whisper] transcribe result (wasm fallback):', retry);
+        return retry;
+      } catch (retryErr) {
+        console.error('[whisper] wasm fallback failed:', retryErr);
+        return { error: retryErr.message };
+      }
+    }
     return { error: err.message };
   }
 });

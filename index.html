@@ -15,7 +15,14 @@
     <header class="titlebar">
       <div class="titlebar-row">
         <div class="titlebar-spacer"></div>
-        <button type="button" class="talk-to-doc-btn" id="talk-to-doc-btn" title="Talk to your docs">Talk to your docs</button>
+        <button type="button" class="talk-to-doc-btn" id="talk-to-doc-btn" title="Chat with docs">Chat with docs</button>
+        <button type="button" class="talk-to-doc-btn" id="speak-with-doc-btn" title="Speak with docs">Speak with docs</button>
+        <button type="button" class="header-settings-btn" id="header-settings-btn" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 1 1-2.6 2.6l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.8 1.8 0 1 1-3.6 0v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 1 1-2.6-2.6l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.8 1.8 0 1 1 0-3.6h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 1 1 2.6-2.6l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a1.8 1.8 0 1 1 3.6 0v.2a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 1 1 2.6 2.6l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a1.8 1.8 0 1 1 0 3.6h-.2a1 1 0 0 0-.9.6z"></path>
+          </svg>
+        </button>
         <div class="search-box">
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
@@ -25,6 +32,11 @@
       </div>
       <div class="toolbar">
         <div class="tabs" id="tabs"></div>
+        <button type="button" class="tabs-new-btn" id="tabs-new-btn" title="New empty tab">+</button>
+        <div class="tabs-overflow-wrap hidden" id="tabs-overflow-wrap">
+          <button type="button" class="tabs-overflow-btn" id="tabs-overflow-btn" title="All tabs">▾</button>
+          <div class="tabs-overflow-menu hidden" id="tabs-overflow-menu"></div>
+        </div>
       </div>
     </header>
 
@@ -41,6 +53,17 @@
         </div>
       </div>
       <div class="viewer-container" id="viewer" style="display:none">
+        <div class="viewer-empty hidden" id="viewer-empty">
+          <div class="viewer-empty-dropzone" id="viewer-empty-dropzone">
+            <div class="viewer-empty-title">Open a file or folder</div>
+            <p class="viewer-empty-hint">Click anywhere here or drag and drop files/folders.</p>
+            <div class="viewer-empty-actions">
+              <button type="button" class="btn" id="empty-open-file-btn">Open file</button>
+              <button type="button" class="btn" id="empty-open-folder-btn">Open folder</button>
+            </div>
+            <input type="file" id="empty-file-input" class="hidden" accept=".md,.markdown,.pdf" multiple>
+          </div>
+        </div>
         <div class="viewer-markdown" id="viewer-markdown">
           <div class="kb-doc-control hidden" id="kb-doc-control">
             <button type="button" class="kb-add-btn" id="kb-add-btn">Add to knowledgebase</button>
@@ -178,10 +201,65 @@
                     </label>
                     <label class="voice-radio-label">
                       <input type="radio" name="stt-mode" value="whisper" id="stt-whisper">
-                      <span class="voice-radio-title">Local Whisper <span class="settings-badge">~74 MB</span></span>
-                      <span class="settings-hint">Fully offline &amp; private. Downloads model on first use.</span>
+                      <span class="voice-radio-title">Local Whisper <span class="settings-badge">~244 MB</span></span>
+                      <span class="settings-hint">Fully offline &amp; private. Multilingual (99 languages).</span>
                     </label>
                   </div>
+                  <div class="voice-language-row">
+                    <label for="stt-language">Speaking language</label>
+                    <select id="stt-language" class="theme-select">
+                      <option value="auto" selected>Auto (use system locale)</option>
+                      <option value="en-US">English (US)</option>
+                      <option value="en-GB">English (UK)</option>
+                      <option value="ru-RU">Russian</option>
+                      <option value="uk-UA">Ukrainian</option>
+                      <option value="de-DE">German</option>
+                      <option value="fr-FR">French</option>
+                      <option value="es-ES">Spanish</option>
+                      <option value="it-IT">Italian</option>
+                      <option value="pt-BR">Portuguese (Brazil)</option>
+                      <option value="pl-PL">Polish</option>
+                      <option value="tr-TR">Turkish</option>
+                      <option value="ja-JP">Japanese</option>
+                      <option value="ko-KR">Korean</option>
+                      <option value="zh-CN">Chinese (Simplified)</option>
+                    </select>
+                    <p class="settings-hint">Improves STT accuracy when your spoken language differs from OS locale.</p>
+                  </div>
+                </div>
+                <div class="settings-group" id="voice-tts-section">
+                  <label>Text-to-speech (Speak mode)</label>
+                  <p class="settings-hint">Read assistant replies aloud during Speak mode.</p>
+                  <label class="voice-toggle-row" for="tts-enabled">
+                    <input type="checkbox" id="tts-enabled" checked>
+                    <span>Read replies aloud</span>
+                  </label>
+                  <div class="voice-tts-grid">
+                    <label for="tts-turn-taking">Turn taking</label>
+                    <select id="tts-turn-taking" class="theme-select">
+                      <option value="resume_after_tts" selected>Resume listening after TTS finishes</option>
+                    </select>
+                    <label for="tts-rate">Speech rate <span id="tts-rate-value">1.00x</span></label>
+                    <input type="range" id="tts-rate" min="0.75" max="1.50" step="0.05" value="1.00">
+                    <label for="tts-voice">Voice</label>
+                    <select id="tts-voice" class="theme-select">
+                      <option value="">System default</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="settings-group" id="whisper-model-section">
+                  <label>Whisper model</label>
+                  <p class="settings-hint" id="whisper-model-name"></p>
+                  <div class="whisper-model-status" id="whisper-model-status">
+                    <span id="whisper-status-text">Checking...</span>
+                  </div>
+                  <div class="whisper-progress-wrap hidden" id="whisper-progress-wrap">
+                    <div class="whisper-progress-bar">
+                      <div class="whisper-progress-fill" id="whisper-progress-fill"></div>
+                    </div>
+                    <span class="whisper-progress-label" id="whisper-progress-label"></span>
+                  </div>
+                  <button type="button" class="btn btn-small" id="whisper-download-btn">Download model</button>
                 </div>
               </div>
             </div>
@@ -209,9 +287,21 @@
           </div>
         </div>
         <div class="viewer-chat hidden" id="viewer-chat">
+          <div id="voice-overlay" class="voice-inline hidden" aria-label="Speak with docs mode">
+            <div class="voice-inline-header">
+              <div class="voice-waveform-wrap">
+                <div class="voice-waveform" id="voice-waveform"></div>
+              </div>
+              <div class="voice-inline-controls">
+                <div class="voice-status" id="voice-status">Listening...</div>
+                <button type="button" id="voice-stop-speaking-btn" class="voice-stop-btn hidden" title="Stop speaking">Stop</button>
+              </div>
+            </div>
+            <div class="voice-subtitles" id="voice-subtitles"></div>
+          </div>
           <div class="chat-messages" id="chat-messages"></div>
           <div class="chat-input-area" id="chat-input-area">
-            <div class="chat-title">Talk to your docs</div>
+            <div class="chat-title">Chat with docs</div>
             <div class="chat-control-bar">
               <div class="chat-input-row">
                 <button type="button" class="chat-new-btn" id="chat-new-btn" title="New chat">
@@ -240,15 +330,6 @@
                   <button type="button" class="chat-sessions-trigger" id="chat-sessions-trigger" title="Sessions">Sessions ▾</button>
                   <div class="chat-sessions-menu hidden" id="chat-sessions-menu"></div>
                 </div>
-                <button type="button" id="ai-voice-btn" class="ai-voice-btn" title="Voice conversation mode">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
-                    <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
-                    <line x1="12" y1="18" x2="12" y2="22"/>
-                    <line x1="8" y1="22" x2="16" y2="22"/>
-                  </svg>
-                  Voice
-                </button>
               </div>
             </div>
           </div>
@@ -284,22 +365,6 @@
       <div class="ollama-remove-footer">
         <button type="button" class="btn" id="ollama-remove-cancel">Cancel</button>
       </div>
-    </div>
-  </div>
-
-  <!-- Voice Overlay -->
-  <div id="voice-overlay" class="voice-overlay hidden" role="dialog" aria-label="Voice conversation mode">
-    <button id="voice-overlay-close" class="voice-overlay-close" aria-label="Close voice mode">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-    <div class="voice-overlay-inner">
-      <div class="voice-waveform-wrap">
-        <div class="voice-waveform" id="voice-waveform"></div>
-      </div>
-      <div class="voice-status" id="voice-status">Listening...</div>
-      <div class="voice-subtitles" id="voice-subtitles"></div>
     </div>
   </div>
 

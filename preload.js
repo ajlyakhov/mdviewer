@@ -55,8 +55,10 @@ contextBridge.exposeInMainWorld('mdviewer', {
   kbClearAll: () => ipcRenderer.invoke('kb-clear-all'),
   onKbImportProgress: (cb) => ipcRenderer.on('kb-import-progress', (_, payload) => cb(payload)),
   whisperGetStatus: () => ipcRenderer.invoke('whisper-get-status'),
+  whisperPreload: () => ipcRenderer.invoke('whisper-preload'),
   whisperTranscribe: (args) => ipcRenderer.invoke('whisper-transcribe', args),
   onWhisperProgress: (cb) => ipcRenderer.on('whisper-progress', (_, p) => cb(p)),
+  voiceDebug: (payload) => ipcRenderer.send('voice-debug', payload),
   getPathForFile: (file) => {
     if (!file) return '';
     try {

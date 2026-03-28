@@ -380,7 +380,7 @@ async function callOllama(provider, messages, contextDocuments) {
     .replace(/localhost/gi, '127.0.0.1');
   const prepared = preparePromptContext(provider, messages, contextDocuments);
   const body = {
-    model: provider.modelId || 'qwen3.5:4b',
+    model: provider.modelId || 'llama3.2:1b',
     messages: convertToOpenAIMessages(prepared.messages, prepared.systemPrompt),
     max_tokens: prepared.maxOutputTokens,
     temperature: 0.7,
@@ -404,7 +404,7 @@ async function callOllamaStream(provider, messages, contextDocuments, onChunk) {
     .replace(/localhost/gi, '127.0.0.1');
   const prepared = preparePromptContext(provider, messages, contextDocuments);
   const body = {
-    model: provider.modelId || 'qwen3.5:4b',
+    model: provider.modelId || 'llama3.2:1b',
     messages: convertToOpenAIMessages(prepared.messages, prepared.systemPrompt),
     max_tokens: prepared.maxOutputTokens,
     temperature: 0.7,
@@ -589,7 +589,7 @@ function buildStreamRequest(provider, messages, contextDocuments) {
       .replace(/\/$/, '')
       .replace(/localhost/gi, '127.0.0.1');
     const body = JSON.stringify({
-      model: provider.modelId || 'qwen3.5:4b',
+      model: provider.modelId || 'llama3.2:1b',
       messages: messagesForApi,
       max_tokens: prepared.maxOutputTokens,
       temperature: 0.7,
