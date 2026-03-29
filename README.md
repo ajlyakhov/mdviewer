@@ -40,8 +40,8 @@ MD Viewer is no longer just a markdown renderer. The core goal is reliable AI-as
 - Structured memory summarization for older turns
 - Adaptive output token budgeting per request
 - Prompt-budget debug telemetry for troubleshooting
-- **Voice input** — mic button in chat for quick speech-to-text (Web Speech API)
-- **Voice conversation mode** — full-screen overlay with live audio waveform, karaoke-style subtitles, and looping AI dialogue; conversations committed to chat on close
+- **Voice input** — mic button in chat for quick speech-to-text (local Whisper or Web Speech API)
+- **Speak with docs** — dedicated Speak tab with inline waveform, karaoke subtitles, system TTS readback, and looping listen → answer → speak loop
 - Drag & drop files or folders (recursive)
 - Drag & drop PDF files for automatic PDF -> Markdown import
 - Open files via menu (File → Open File / Open Folder)
@@ -58,11 +58,19 @@ MD Viewer is no longer just a markdown renderer. The core goal is reliable AI-as
 
 ## Voice
 
-MD Viewer has two voice input modes:
+MD Viewer has two voice modes:
 
-**Mic button** (quick dictation): In the chat input row, click the mic icon to start recording. Words appear in the textarea live as you speak. Click again or pause to stop.
+**Mic button** (quick dictation): In the chat input row, click the mic icon to start recording. Words appear in the textarea live as you speak. Click again or pause to stop. Uses local Whisper STT — fully offline.
 
-**Voice conversation mode**: Click the **Voice** button in the model row to open a full-screen voice experience — real-time audio waveform, karaoke subtitles (your words on the right, AI responses on the left), and an automatic speak → respond → listen loop. Close with × or Escape; the whole conversation lands in your active chat session.
+**Speak with docs tab**: A dedicated tab for hands-free voice conversation with your documents. Opens an inline panel with a live audio waveform, karaoke-style subtitles (your words on the right, AI responses on the left), and an automatic listen → transcribe → answer → speak → listen loop. The assistant reads replies aloud via system TTS. Hit **Stop** to interrupt a long reply, or switch away from the Speak tab to end the session.
+
+Voice settings (Settings → Voice):
+- **STT engine**: System (Web Speech API) or Local Whisper (offline, ~74 MB download)
+- **Speech language**: Improves STT accuracy when your spoken language differs from OS locale
+- **Read replies aloud**: Enable/disable TTS in Speak mode
+- **Speech rate**: 0.75× – 1.5×
+- **Voice**: Pick from available system voices
+- **Whisper model**: Download and manage the local Whisper model
 
 See [voice.md](voice.md) for full technical documentation, architecture, and platform support notes.
 
