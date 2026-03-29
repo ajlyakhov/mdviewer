@@ -1,84 +1,116 @@
 # Voice Features — MD Viewer
 
-MD Viewer supports two voice input modes, both accessible directly from the chat panel.
+MD Viewer supports two voice modes: quick mic dictation in the chat panel, and a dedicated **Speak with docs** tab for full voice conversation.
 
 ---
 
 ## Quick voice input (mic button)
 
-A small mic button sits between the textarea and the Send button in the chat input row.
+A mic button sits in the chat input row between the textarea and the Send button.
 
 **How it works:**
 - Click once → starts recording (button pulses red)
-- Speak → live interim transcription appears in the textarea as you talk
-- Silence or click again → stops recording, text is ready to review and send
-- Uses the **Web Speech API** (your OS/browser speech engine — no download needed)
+- Speak → live interim transcription appears in the textarea
+- Silence or click again → stops recording; text is ready to review and send
+- Click again or press Send → submits
+
+**STT engine:** Uses Local Whisper by default (fully offline). Can be switched to Web Speech API in Settings → Voice.
 
 **When to use:** Quick one-off dictation. Works like typing, but hands-free.
 
 ---
 
-## Voice conversation mode (AI Voice overlay)
+## Speak with docs (dedicated tab)
 
-A **"Voice"** button in the model row (bottom-left of the chat panel) opens a full-screen voice conversation experience.
+Click the **"Speak with docs"** button in the header to open a dedicated Speak tab. This replaces the old fullscreen voice overlay.
 
 **How it works:**
-1. Click **Voice** → full-screen dark overlay opens
-2. Speak your message → waveform responds to your voice in real time
-3. Pause → your words are sent to the AI model
-4. AI streams back its response — text appears as karaoke-style subtitles
-5. Listening automatically resumes after the AI finishes
-6. Loop continues until you press **×** or **Escape**
-7. On close → the entire conversation is committed to the active chat session
+1. The Speak tab opens with an inline voice panel
+2. Speak → waveform responds to your voice in real time
+3. Pause → your words are transcribed and sent to the AI
+4. AI streams its response — text appears as karaoke-style subtitles
+5. The assistant reads the reply aloud via system TTS (if enabled)
+6. Listening automatically resumes after TTS finishes (turn-taking mode)
+7. Switch away from the Speak tab to end the session
 
 **UI elements:**
-- **Waveform** (center): 32-bar frequency visualizer using Web Audio API. Reacts to your mic in real time. During AI thinking it plays a gentle ripple animation.
-- **Status label**: LISTENING... / THINKING... / error messages
-- **Subtitles** (below waveform): user speech aligned right (white), AI response aligned left (purple). New entries animate in.
-- **× button** (top-right) / **Escape**: close and commit to chat
+- **Waveform**: 32-bar frequency visualizer. Reacts to your mic in real time; plays a ripple animation while the AI is thinking
+- **Status label**: `Listening...` / `Thinking...` / error states
+- **Subtitles**: user speech right-aligned (white), AI response left-aligned (purple), animated in as they arrive
+- **Stop button**: interrupts TTS mid-reply immediately
+- **Settings shortcut**: quick access to Voice settings from within the panel
 
-**When to use:** Extended back-and-forth conversations, when you want a hands-free experience, or when you want to see the dialogue play out visually before it lands in the chat.
-
----
-
-## Architecture
-
-### Phase 1 — MediaRecorder + Whisper (mic button)
-- `renderer.js`: `initVoice()`, `startVoice()`, `stopVoice()`, `decodeAndResampleAudio()`
-- `navigator.mediaDevices.getUserMedia` → `MediaRecorder` → audio blob
-- On stop: `AudioContext.decodeAudioData()` + `OfflineAudioContext` resampling to 16 kHz mono Float32Array
-- Sent to main process via `window.mdviewer.whisperTranscribe()` IPC
-- Button states: idle → recording (red pulse) → transcribing (amber pulse) → idle
-- Note: Web Speech API (`SpeechRecognition`) is not used — it routes through Google's cloud and fails in Electron's `file://` context with a `network` error
-
-### Phase 2 — Local Whisper STT (foundation shipped, UI toggle coming)
-- `main.js`: `loadWhisperPipeline()` + IPC handlers `whisper-transcribe`, `whisper-get-status`
-- Uses `@xenova/transformers` (already a dep) with model `Xenova/whisper-base.en` (~74 MB)
-- Model is downloaded once and cached in `{userData}/whisper-models/`
-- Audio capture: `MediaRecorder` → `AudioContext.decodeAudioData()` → resample to 16 kHz Float32Array → IPC → Whisper
-- Progress events sent back via `whisper-progress` IPC event
-- `preload.js`: `whisperTranscribe`, `whisperGetStatus`, `onWhisperProgress`
-- Settings: Voice → Speech-to-text engine → **System** / **Local Whisper** (toggle enables once wired up)
-
-### Phase 3 — VoiceMode overlay (shipped)
-- `renderer.js`: `VoiceMode` class, `initVoiceMode()`
-- Web Audio API `AnalyserNode` with `fftSize=64` for real-time waveform
-- **Silence detection** built into the waveform animation loop: tracks `maxFrequencyValue > threshold` frames; stops `MediaRecorder` after ~1.2s of silence following detected speech
-- Audio recorded via `MediaRecorder` on the same mic stream as the waveform analyser
-- Transcription: `decodeAndResampleAudio()` → `whisperTranscribe` IPC (same as mic button)
-- AI calls reuse existing `chatCompletionStream` / `chatCompletion` IPC with shared `streamChunkHandler`/`streamDoneHandler` globals
-- Exchanges pushed live to `chatMessagesData` for correct context window on multi-turn
-- On close: calls `renderChatMessages()` + `saveChatMessages()` for persistence
+**When to use:** Extended hands-free conversations with your docs. The AI is tuned for spoken output — short, plain responses without heavy markdown formatting.
 
 ---
 
 ## Settings
 
 **Settings → Voice → Speech-to-text engine**
-- **System (Web Speech API)** — default. Fast, streaming. Uses OS/browser engine.
-- **Local Whisper** *(coming soon)* — fully offline, private. Downloads ~74 MB on first use.
+- **System (Web Speech API)** — fast, streaming. Routes through OS/browser speech engine (may require network on some platforms)
+- **Local Whisper** — fully offline, private. Downloads ~74 MB model on first use (cached in `{userData}/whisper-models/`)
 
-STT mode preference is persisted in `localStorage` under the key `voiceSttMode`.
+**Settings → Voice → Speech language**
+- `Auto` (default) — uses OS locale
+- BCP-47 locale (e.g. `en-US`, `es-ES`, `ru-RU`) — improves STT accuracy when your spoken language differs from OS locale
+
+**Settings → Voice → Text-to-speech (Speak mode)**
+- **Read replies aloud** — toggle TTS on/off
+- **Turn taking** — `Resume listening after TTS finishes` (default) or `Resume immediately`
+- **Speech rate** — 0.75× to 1.5×, persisted across sessions
+- **Voice** — pick from available system voices; `System default` falls back to OS default
+
+**Settings → Voice → Whisper model**
+- Shows current model name and download status
+- Download / re-download the local Whisper model (`Xenova/whisper-base.en`, ~74 MB)
+- Progress bar shown during download
+
+All voice settings are persisted in `localStorage`.
+
+| Key | Values |
+|-----|--------|
+| `voiceSttMode` | `whisper` \| `webspeech` |
+| `voiceSpeechLanguage` | `auto` \| BCP-47 locale |
+| `voiceTtsEnabled` | `1` \| `0` |
+| `voiceTtsTurnTaking` | `resume_after_tts` \| `resume_immediately` |
+| `voiceTtsRate` | float 0.75–1.5 |
+| `voiceTtsVoiceUri` | SpeechSynthesisVoice URI or empty |
+
+---
+
+## Architecture
+
+### Mic button — quick dictation
+- `renderer.js`: `initVoice()`, `startVoice()`, `stopVoice()`, `decodeAndResampleAudio()`
+- `navigator.mediaDevices.getUserMedia` → `AudioWorklet` (`voice-capture-worklet.js`) captures 16 kHz mono PCM
+- On stop: Float32Array sent to main process via `window.mdviewer.whisperTranscribe()` IPC
+- Button states: idle → recording (red pulse) → transcribing (amber pulse) → idle
+- Mic stream released after a short idle delay to avoid keeping the mic hot between turns
+
+### Local Whisper STT
+- `whisper-worker.js`: dedicated Worker running `@xenova/transformers`
+- Model: `Xenova/whisper-base.en` (~74 MB), downloaded once and cached in `{userData}/whisper-models/`
+- Main process (`main.js`): `loadWhisperPipeline()` + IPC handlers `whisper-transcribe`, `whisper-get-status`
+- Progress events sent back via `whisper-progress` IPC event
+- `preload.js` exposes: `whisperTranscribe`, `whisperGetStatus`, `onWhisperProgress`
+- Note: Web Speech API (`SpeechRecognition`) is not used in Electron — it routes through Google's cloud and fails in `file://` context with a `network` error
+
+### System TTS (`SystemTtsQueue`)
+- Uses `window.speechSynthesis` (Web Speech API TTS — available natively in Electron/Chromium)
+- `ttsQueue.appendMarkdownDelta(chunk)` — accumulates streaming text, strips markdown, queues utterances
+- `ttsQueue.flushFinal()` — ensures trailing text is spoken
+- `ttsQueue.cancel()` — immediate stop (triggered by Stop button or session close)
+- `ttsQueue.waitForIdle()` — awaits TTS completion before resuming STT (turn-taking)
+- `ttsQueue.onSpeakingChange(cb)` — drives Stop button visibility
+
+### Speak tab / VoiceMode
+- `renderer.js`: `VoiceMode` class, `initVoiceMode()`, `openSpeakTab()`
+- Speak tab is a virtual tab (`SPEAK_TAB = { type: 'speak', ... }`); switching to it shows the inline `#voice-overlay` panel
+- `VoiceMode` manages the full listen → transcribe → send → stream → TTS → listen loop
+- Web Audio `AnalyserNode` (`fftSize=64`) drives the waveform animation
+- Silence detection: VAD in waveform animation loop; stops `MediaRecorder` after ~1.2s of silence following detected speech
+- Multi-turn context: exchanges are pushed live to `chatMessagesData` so each AI turn has full conversation context
+- AI output tuned for spoken delivery: `systemPromptSuffix` instructs the model to respond in short, plain sentences without lists or code blocks
 
 ---
 
@@ -86,7 +118,7 @@ STT mode preference is persisted in `localStorage` under the key `voiceSttMode`.
 
 | Key | Action |
 |-----|--------|
-| Escape | Close voice overlay |
+| Escape | Stop / close Speak mode (while in Speak tab) |
 
 ---
 
@@ -94,8 +126,10 @@ STT mode preference is persisted in `localStorage` under the key `voiceSttMode`.
 
 | Feature | macOS | Windows | Linux |
 |---------|-------|---------|-------|
+| Mic button (Local Whisper) | ✅ | ✅ | ✅ |
 | Mic button (Web Speech) | ✅ | ✅ | ⚠️ Chromium only |
-| Voice overlay (Web Speech) | ✅ | ✅ | ⚠️ Chromium only |
-| Local Whisper | ✅ | ✅ | ✅ (coming soon) |
+| Speak tab (Local Whisper) | ✅ | ✅ | ✅ |
+| Speak tab (Web Speech) | ✅ | ✅ | ⚠️ Chromium only |
+| System TTS | ✅ | ✅ | ⚠️ Depends on OS voices |
 
-Web Speech API requires a network connection on some platforms (it may route through the OS cloud STT engine). Whisper is fully local once the model is downloaded.
+Local Whisper is fully offline on all platforms once the model is downloaded. Web Speech API may route through the OS cloud STT engine on some platforms.
